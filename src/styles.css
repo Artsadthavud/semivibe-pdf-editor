@@ -2,6 +2,7 @@
   font-family: 'Inter', system-ui, sans-serif;
   background: #eef2ff;
   color: #0f172a;
+  --toolbar-offset: 140px; /* space reserved for the fixed toolbar */
 }
 
 * {
@@ -327,14 +328,38 @@ input {
   background: linear-gradient(180deg, rgba(226, 232, 255, 0.3) 0%, rgba(255, 255, 255, 0) 45%);
 }
 
+/* Paper / workspace layout: center an A4 sized paper inside workspace */
+.workspace {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  /* leave room for the fixed toolbar so the paper isn't covered */
+  padding-top: var(--toolbar-offset);
+}
+
 .canvas-area {
+  /* A4 at nominal CSS units: 210mm x 297mm */
+  width: 210mm;
+  height: 297mm;
+  max-width: calc(100% - 3rem);
+  max-height: calc(100vh - 8rem);
   position: relative;
-  flex: 1;
   background: white;
-  border-radius: 18px;
-  border: 1px solid #c7d2fe;
-  box-shadow: 0 12px 24px rgba(148, 163, 184, 0.3);
+  border-radius: 6px;
+  border: 1px solid rgba(199, 210, 254, 0.6);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
   overflow: hidden;
+  margin: 2rem auto;
+  display: block;
+}
+
+/* scale paper down on very small screens to fit */
+@media (max-width: 480px) {
+  .canvas-area {
+    width: calc(100% - 2rem);
+    height: auto;
+    aspect-ratio: 210 / 297;
+  }
 }
 
 .canvas-layer {

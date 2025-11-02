@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
 import clsx from 'clsx';
 import Canvas from './Canvas';
 import type { Page, Shape, ShapeType, Stroke, TextItem, ToolType, AttachItem } from './types';
@@ -108,6 +108,7 @@ const App = () => {
   const [uploadedAssets, setUploadedAssets] = useState<Array<{ id: string; name: string; url: string }>>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const objectUrlsRef = useRef<Set<string>>(new Set());
+  const toolbarRef = useRef<HTMLElement | null>(null);
 
   // load project-scoped assets from src/assets at build time (Vite import.meta.glob)
   useEffect(() => {
@@ -124,6 +125,23 @@ const App = () => {
     } catch (e) {
       // import.meta.glob not available in non-vite environments; ignore silently
     }
+  }, []);
+
+  // measure toolbar and set CSS variable so workspace is offset dynamically
+  useLayoutEffect(() => {
+    const setOffset = () => {
+      try {
+        const el = toolbarRef.current;
+        if (!el) return;
+        const h = Math.ceil(el.getBoundingClientRect().height + 12); // 12px gap
+        document.documentElement.style.setProperty('--toolbar-offset', `${h}px`);
+      } catch (e) {
+        // ignore
+      }
+    };
+    setOffset();
+    window.addEventListener('resize', setOffset);
+    return () => window.removeEventListener('resize', setOffset);
   }, []);
 
   const activePage = pages.find((page) => page.id === activePageId) ?? pages[0];
@@ -464,7 +482,7 @@ const App = () => {
 
   return (
     <div className="app-shell">
-      <header className="toolbar">
+      <header className="toolbar" ref={toolbarRef}>
         <div className="toolbar-row">
           <ToolToggle
             options={TOOL_META}
