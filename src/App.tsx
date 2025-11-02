@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
+import { PDFDocument } from 'pdf-lib';
 import clsx from 'clsx';
 import Canvas from './Canvas';
 import type { Page, Shape, ShapeType, Stroke, TextItem, ToolType, AttachItem } from './types';
@@ -143,6 +144,216 @@ const App = () => {
     window.addEventListener('resize', setOffset);
     return () => window.removeEventListener('resize', setOffset);
   }, []);
+
+  const handleExportPdf = useCallback(async () => {
+    try {
+      const a4mm = { w: 210, h: 297 };
+      const DPI = 300;
+      const mmToInch = (mm: number) => mm / 25.4;
+      const targetW = Math.round(mmToInch(a4mm.w) * DPI);
+      const targetH = Math.round(mmToInch(a4mm.h) * DPI);
+
+      const container = document.querySelector('.canvas-area') as HTMLElement | null;
+      const srcWidth = container ? container.getBoundingClientRect().width :  (210);
+      const srcHeight = container ? container.getBoundingClientRect().height : (297);
+      const scaleX = targetW / srcWidth;
+      const scaleY = targetH / srcHeight;
+
+      const loadImage = (src: string): Promise<HTMLImageElement> =>
+        new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => resolve(img);
+          img.onerror = (e) => reject(e);
+          img.src = src;
+        });
+
+      const pdfDoc = await PDFDocument.create();
+
+      for (const pageModel of pages) {
+        const off = document.createElement('canvas');
+        off.width = targetW;
+        off.height = targetH;
+        const ctx = off.getContext('2d');
+        if (!ctx) throw new Error('Unable to create export canvas');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, off.width, off.height);
+
+        for (const attach of pageModel.attachments ?? []) {
+          try {
+            const img = await loadImage(attach.src);
+            ctx.drawImage(
+              img,
+              attach.x * scaleX,
+              attach.y * scaleY,
+              attach.width * scaleX,
+              attach.height * scaleY
+            );
+          } catch (e) {}
+        }
+
+        const drawShape = (shape: Shape) => {
+          ctx.save();
+          ctx.strokeStyle = shape.stroke;
+          ctx.lineWidth = (shape.strokeWidth || 1) * Math.max(scaleX, scaleY);
+          ctx.lineJoin = 'round';
+          ctx.lineCap = 'round';
+          const sx = shape.start.x * scaleX;
+          const sy = shape.start.y * scaleY;
+          const ex = shape.end.x * scaleX;
+          const ey = shape.end.y * scaleY;
+          switch (shape.type) {
+            case 'line':
+              ctx.beginPath();
+              ctx.moveTo(sx, sy);
+              ctx.lineTo(ex, ey);
+              ctx.stroke();
+              break;
+            case 'arrow': {
+              const angle = Math.atan2(ey - sy, ex - sx);
+              const headLength = 12 + (shape.strokeWidth || 1) * 1.5;
+              ctx.beginPath();
+              ctx.moveTo(sx, sy);
+              ctx.lineTo(ex, ey);
+              ctx.stroke();
+              ctx.beginPath();
+              ctx.moveTo(ex, ey);
+              ctx.lineTo(
+                ex - headLength * Math.cos(angle - Math.PI / 6),
+                ey - headLength * Math.sin(angle - Math.PI / 6)
+              );
+              ctx.moveTo(ex, ey);
+              ctx.lineTo(
+                ex - headLength * Math.cos(angle + Math.PI / 6),
+                ey - headLength * Math.sin(angle + Math.PI / 6)
+              );
+              ctx.stroke();
+              break;
+            }
+            case 'rectangle': {
+              const left = Math.min(sx, ex);
+              const top = Math.min(sy, ey);
+              const width = Math.abs(ex - sx);
+              const height = Math.abs(ey - sy);
+              ctx.strokeRect(left, top, width, height);
+              break;
+            }
+            case 'ellipse': {
+              const rx = Math.max(Math.abs(ex - sx) / 2, 1);
+              const ry = Math.max(Math.abs(ey - sy) / 2, 1);
+              const cx = (sx + ex) / 2;
+              const cy = (sy + ey) / 2;
+              ctx.beginPath();
+              ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+              ctx.stroke();
+              break;
+            }
+            default:
+              break;
+          }
+          ctx.restore();
+        };
+
+        for (const shape of pageModel.shapes) drawShape(shape);
+
+        for (const stroke of pageModel.strokes) {
+          if (!stroke.points || stroke.points.length < 2) continue;
+          ctx.save();
+          ctx.lineJoin = 'round';
+          ctx.lineCap = 'round';
+          ctx.lineWidth = (stroke.thickness || 1) * Math.max(scaleX, scaleY);
+          ctx.strokeStyle = stroke.color;
+          ctx.globalAlpha = stroke.tool === 'highlighter' ? stroke.opacity ?? 0.55 : 1;
+          ctx.beginPath();
+          ctx.moveTo(stroke.points[0].x * scaleX, stroke.points[0].y * scaleY);
+          for (let i = 1; i < stroke.points.length; i++) {
+            ctx.lineTo(stroke.points[i].x * scaleX, stroke.points[i].y * scaleY);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        for (const text of pageModel.texts) {
+          const fontSize = text.fontSize * Math.max(scaleX, scaleY);
+          ctx.font = `${text.bold ? '700' : '400'} ${fontSize}px ${text.fontFamily}`;
+          ctx.fillStyle = text.color || '#000';
+          const lineHeight = fontSize * 1.2;
+          const maxWidth = text.width * scaleX;
+          const x = text.x * scaleX;
+          let y = text.y * scaleY + fontSize;
+          if (text.background) {
+            const lines: string[] = [];
+            if (text.singleLine) lines.push(text.text);
+            else {
+              const words = (text.text || '').split(/\s+/);
+              let line = '';
+              for (const w of words) {
+                const test = line ? line + ' ' + w : w;
+                const m = ctx.measureText(test).width;
+                if (m > maxWidth && line) {
+                  lines.push(line);
+                  line = w;
+                } else {
+                  line = test;
+                }
+              }
+              if (line) lines.push(line);
+            }
+            const bgH = lines.length * lineHeight + 8;
+            ctx.fillStyle = text.backgroundColor || '#fff';
+            ctx.fillRect(x - 4, text.y * scaleY - 4, maxWidth + 8, bgH);
+            ctx.fillStyle = text.color || '#000';
+            for (const l of lines) {
+              ctx.fillText(l, x, y);
+              y += lineHeight;
+            }
+          } else {
+            if (text.singleLine) {
+              ctx.fillText(text.text || '', x, y);
+            } else {
+              const words = (text.text || '').split(/\s+/);
+              let line = '';
+              for (const w of words) {
+                const test = line ? line + ' ' + w : w;
+                const m = ctx.measureText(test).width;
+                if (m > maxWidth && line) {
+                  ctx.fillText(line, x, y);
+                  line = w;
+                  y += lineHeight;
+                } else {
+                  line = test;
+                }
+              }
+              if (line) ctx.fillText(line, x, y);
+            }
+          }
+        }
+
+        const blob: Blob | null = await new Promise((resolve) => off.toBlob((b) => resolve(b), 'image/png'));
+        if (!blob) throw new Error('Failed to render page image');
+        const arrayBuffer = await blob.arrayBuffer();
+        const img = await pdfDoc.embedPng(arrayBuffer);
+        const ptPerInch = 72;
+        const a4pt = { w: Math.round(mmToInch(a4mm.w) * ptPerInch), h: Math.round(mmToInch(a4mm.h) * ptPerInch) };
+        const page = pdfDoc.addPage([a4pt.w, a4pt.h]);
+        page.drawImage(img, { x: 0, y: 0, width: a4pt.w, height: a4pt.h });
+      }
+
+      const pdfBytes = await pdfDoc.save();
+  // pdfBytes is a Uint8Array; cast to any so Blob typing is satisfied across environments
+  const pdfBlob = new Blob([pdfBytes as any], { type: 'application/pdf' });
+      const url = URL.createObjectURL(pdfBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'export.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Export failed: ' + (err as Error).message);
+    }
+  }, [pages]);
 
   const activePage = pages.find((page) => page.id === activePageId) ?? pages[0];
 
@@ -529,6 +740,7 @@ const App = () => {
             <button type="button" className="toolbar-action" onClick={handleClearPage}>
               Clear page
             </button>
+            <button type="button" className="toolbar-action" onClick={handleExportPdf}>Export PDF</button>
           </div>
         </div>
 
