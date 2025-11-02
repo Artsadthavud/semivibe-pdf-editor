@@ -51,6 +51,10 @@ export type AttachItem = {
   height: number;
   src: string; // object URL or remote URL
   name?: string;
+  // if true this attachment was created from an imported PDF page and should not be removed
+  locked?: boolean;
+  // group id for the originating PDF import
+  pdfBackgroundGroup?: string;
 };
 
 export type Page = {
@@ -60,4 +64,6 @@ export type Page = {
   shapes: Shape[];
   texts: TextItem[];
   attachments?: AttachItem[];
+  // optional group id if this page was created from a PDF import
+  pdfImportGroup?: string;
 };

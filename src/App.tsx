@@ -4,6 +4,12 @@ import clsx from 'clsx';
 import Canvas from './Canvas';
 import type { Page, Shape, ShapeType, Stroke, TextItem, ToolType, AttachItem } from './types';
 
+type PdfImport = {
+  id: string;
+  name: string;
+  pageIds: string[];
+};
+
 type TextDefaults = {
   color: string;
   fontSize: number;
@@ -109,6 +115,7 @@ const App = () => {
   const [uploadedAssets, setUploadedAssets] = useState<Array<{ id: string; name: string; url: string }>>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const objectUrlsRef = useRef<Set<string>>(new Set());
+  const [pdfImports, setPdfImports] = useState<PdfImport[]>([]);
   const toolbarRef = useRef<HTMLElement | null>(null);
 
   // load project-scoped assets from src/assets at build time (Vite import.meta.glob)
@@ -533,6 +540,134 @@ const App = () => {
     if (next.length > 0) setUploadedAssets((prev) => [...prev, ...next]);
   };
 
+  // Import PDF and render pages to background attachments (uses pdfjs)
+  const handlePdfUpload = async (file: File) => {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdfjs = await import('pdfjs-dist');
+      if (!pdfjs) {
+        throw new Error('Unable to load pdfjs-dist module.');
+      }
+
+      const getDocument =
+        pdfjs.getDocument ||
+        pdfjs.default?.getDocument;
+      const GlobalWorkerOptions =
+        pdfjs.GlobalWorkerOptions ||
+        pdfjs.default?.GlobalWorkerOptions;
+
+      if (!getDocument) {
+        throw new Error('pdfjs-dist getDocument API not available.');
+      }
+
+          // If the main entry has emitted a worker asset URL, use it so pdfjs can spawn a worker.
+          // The URL may be provided at build/dev time by importing the worker with ?url in src/main.tsx
+          // or we can try to import the worker ourselves from known candidate paths.
+          let workerUrl: string | undefined = typeof window !== 'undefined' ? (window as any).__PDF_WORKER_URL : undefined;
+
+          // If not available yet, try resolving common candidate specifiers so Vite emits the asset.
+          if (!workerUrl) {
+            const candidates = [
+              'pdfjs-dist/build/pdf.worker.mjs?url',
+              'pdfjs-dist/build/pdf.worker.min.mjs?url',
+              'pdfjs-dist/legacy/build/pdf.worker.mjs?url',
+              'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
+            ];
+            for (const spec of candidates) {
+              try {
+                // @ts-ignore
+                const mod = await import(/* @vite-ignore */ spec);
+                // some bundlers export the URL as default
+                // @ts-ignore
+                const url = (mod && (mod as any).default) || (mod as any);
+                if (url) {
+                  workerUrl = url;
+                  // also expose globally for other code that may look for it
+                  if (typeof window !== 'undefined') (window as any).__PDF_WORKER_URL = url;
+                  break;
+                }
+              } catch (e) {
+                // try next candidate
+              }
+            }
+          }
+
+      let loading: any;
+      if (GlobalWorkerOptions) {
+        if (workerUrl) {
+          try {
+            GlobalWorkerOptions.workerSrc = workerUrl;
+            loading = getDocument({ data: arrayBuffer });
+          } catch (e) {
+            loading = getDocument({ data: arrayBuffer, disableWorker: true } as any);
+          }
+        } else {
+          loading = getDocument({ data: arrayBuffer, disableWorker: true } as any);
+        }
+      } else {
+        loading = getDocument({ data: arrayBuffer, disableWorker: true } as any);
+      }
+      const pdf = await loading.promise;
+      const groupId = createId();
+      const pageIds: string[] = [];
+      // clone current pages to mutate locally
+      const localPages = pages.slice();
+      const container = document.querySelector('.canvas-area') as HTMLElement | null;
+      const containerWidth = container ? container.getBoundingClientRect().width : 800;
+
+      for (let p = 1; p <= pdf.numPages; p += 1) {
+        const pdfPage = await pdf.getPage(p);
+        const viewport = pdfPage.getViewport({ scale: 1 });
+        const scale = Math.max(1, containerWidth / viewport.width);
+        const renderViewport = pdfPage.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(renderViewport.width);
+        canvas.height = Math.round(renderViewport.height);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) continue;
+        await pdfPage.render({ canvasContext: ctx, viewport: renderViewport }).promise;
+        const blob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
+        if (!blob) continue;
+        const url = URL.createObjectURL(blob);
+        objectUrlsRef.current.add(url);
+
+        // ensure localPages has a slot for this page
+        while (localPages.length < p) {
+          const np = createPage(localPages.length);
+          np.pdfImportGroup = groupId;
+          localPages.push(np);
+        }
+
+        // create attachment that covers the full page area
+        const attach: AttachItem = {
+          id: createId(),
+          x: 0,
+          y: 0,
+          width: canvas.width,
+          height: canvas.height,
+          src: url,
+          name: `${file.name} (page ${p})`,
+          locked: true,
+          pdfBackgroundGroup: groupId
+        };
+
+        const target = localPages[p - 1];
+        target.attachments = [attach, ...(target.attachments ?? [])];
+        target.pdfImportGroup = groupId;
+        pageIds.push(target.id);
+      }
+
+      // commit pages and record import group
+      setPages(localPages.map((pg, idx) => ({ ...pg, name: `Page ${idx + 1}` })));
+      setPdfImports((prev) => [...prev, { id: groupId, name: file.name, pageIds }]);
+      // select first page of the imported PDF
+      if (pageIds.length > 0) setActivePageId(pageIds[0]);
+    } catch (err) {
+      // eslint-disable-next-line no-alert
+      alert('PDF import failed: ' + (err as Error).message);
+    }
+  };
+
   const handleSelectAsset = (id: string | null) => {
     setSelectedAssetId(id);
     if (id) setTool('attach');
@@ -588,8 +723,15 @@ const App = () => {
   };
 
   const handleAttachDelete = (id: string) => {
-    // revoke object URL if we created it earlier
+    // prevent deleting PDF-imported backgrounds
     const attach = activePage.attachments?.find((a) => a.id === id);
+    if (attach?.locked) {
+      // ignore deletion for locked attachments
+      // eslint-disable-next-line no-alert
+      alert('This background was imported from a PDF and cannot be deleted here. Use the Import list to remove it.');
+      return;
+    }
+    // revoke object URL if we created it earlier
     if (attach && objectUrlsRef.current.has(attach.src)) {
       try {
         URL.revokeObjectURL(attach.src);
@@ -657,6 +799,13 @@ const App = () => {
   const handleRemovePage = (id: string) => {
     setPages((prev) => {
       if (prev.length === 1) return prev;
+      const toRemove = prev.find((p) => p.id === id);
+      // don't allow removing pages that are part of a PDF import here
+      if (toRemove?.pdfImportGroup) {
+        // eslint-disable-next-line no-alert
+        alert('This page is part of an imported PDF and cannot be removed here. Use the Imports list to remove the entire PDF.');
+        return prev;
+      }
       let filtered = prev.filter((page) => page.id !== id);
       filtered = filtered.map((page, index) => ({
         ...page,
@@ -668,6 +817,30 @@ const App = () => {
       return filtered;
     });
     setSelectedTextId(null);
+  };
+
+  const handleRemovePdfImport = (groupId: string) => {
+    // remove pages and revoke their object URLs
+    setPages((prev) => {
+      const toRemovePages = prev.filter((p) => p.pdfImportGroup === groupId);
+      toRemovePages.forEach((pg) => {
+        (pg.attachments ?? []).forEach((a) => {
+          if (a.pdfBackgroundGroup === groupId && objectUrlsRef.current.has(a.src)) {
+            try {
+              URL.revokeObjectURL(a.src);
+            } catch (e) {}
+            objectUrlsRef.current.delete(a.src);
+          }
+        });
+      });
+      const remaining = prev.filter((p) => p.pdfImportGroup !== groupId).map((page, idx) => ({ ...page, name: `Page ${idx + 1}` }));
+      // adjust active page if it was removed
+      if (!remaining.find((p) => p.id === activePageId)) {
+        setActivePageId(remaining[remaining.length - 1]?.id ?? remaining[0]?.id ?? '');
+      }
+      return remaining;
+    });
+    setPdfImports((prev) => prev.filter((imp) => imp.id !== groupId));
   };
 
   const handleClearPage = () => {
@@ -876,6 +1049,7 @@ const App = () => {
                     />
                     + Add images
                   </label>
+                  {/* PDF import moved to its own section */}
                   {/* folder selection removed: project-assets and uploads are supported via the other controls */}
                   <div className="attach-list">
                     {uploadedAssets.map((asset) => (
@@ -895,6 +1069,42 @@ const App = () => {
                         </div>
                         <div className="attach-name">{asset.name}</div>
                         <div className="attach-preview"><img src={asset.url} alt={asset.name} /></div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* PDF import list moved to its own panel */}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="control-card">
+            <div className="card-header">
+              <span className="card-label">PDF import</span>
+              <span className="card-value">Upload PDF as page backgrounds</span>
+            </div>
+            <div className="card-body card-body--stacked">
+              <div className="setting-group">
+                <span className="setting-label">Upload</span>
+                <div className="pdf-card">
+                  <label className="attach-upload">
+                    <input
+                      type="file"
+                      accept="application/pdf"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handlePdfUpload(f);
+                        (e.target as HTMLInputElement).value = '';
+                      }}
+                    />
+                    + Import PDF
+                  </label>
+                  <div className="pdf-import-list">
+                    {pdfImports.map((imp) => (
+                      <div key={imp.id} className="pdf-import-row">
+                        <div className="pdf-name">{imp.name} · {imp.pageIds.length} pages</div>
+                        <button type="button" className="pdf-remove" onClick={() => handleRemovePdfImport(imp.id)}>Remove</button>
                       </div>
                     ))}
                   </div>
@@ -1066,7 +1276,7 @@ const App = () => {
               }}
             >
               {page.name}
-              {pages.length > 1 ? (
+              {pages.length > 1 && !page.pdfImportGroup ? (
                 <span
                   className="remove"
                   onClick={(event) => {
