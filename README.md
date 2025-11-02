@@ -1,55 +1,58 @@
-# semivibe-pdf-editor (react-draw)
+# semivibe-pdf-editor — react-draw
 
-Lightweight React + TypeScript PDF annotation canvas built with Vite.
+A lightweight in-browser PDF annotation and markup editor built with React, TypeScript and Vite.
 
-This repository is a small in-browser editor for annotating PDF-like pages (A4) with pen strokes, shapes, text boxes and image attachments. It uses a single HTML5 canvas for rendering strokes and shapes, with DOM overlays for editable text and attachments.
+This package provides a small, focused canvas-based editor for annotating single-page PDF-like content (default A4 layout) with freehand strokes, highlights, shapes, editable text boxes and image attachments.
 
-## Quick start (development)
+Key goals:
+- Fast, minimal UI for annotating documents in the browser
+- Preserve logical page size for reliable export and printing
+- Editable text as DOM overlays for accurate caret placement and accessibility
+- Keep interaction code simple and predictable so annotations map precisely to page coordinates
 
-Open a terminal (PowerShell on Windows is recommended) and run:
+Contents
+- `src/` — React app source (canvas rendering, text overlays, toolbar and tools)
+- `index.html`, `vite.config.ts` — Vite entry and configuration
+
+Features
+- Pen and highlighter with pressure-insensitive stroke rendering
+- Shapes (line, rectangle, ellipse, arrow, check, cross, plus/minus)
+- Editable text boxes rendered as DOM overlays (contentEditable) for accurate caret handling
+- Drag-and-drop image attachments
+- Export helpers to embed annotations into PDFs or rasterize pages
+
+Architecture notes
+- Rendering: a single HTML5 canvas is used to draw strokes, shapes and raster attachments. Text and attachments are DOM overlays positioned over the canvas to allow selection and editing.
+- Zooming: the app applies a visual scale to the internal viewport and visible canvas size while keeping the logical page size fixed; pointer coordinates are mapped back to logical coordinates for interactions.
+- Export: when exporting annotated pages, the app either preserves original PDF pages (when available) or rasterizes annotations at a high resolution and overlays them on a target PDF page.
+
+Quick start (development)
+
+1. Install dependencies and run the dev server (PowerShell on Windows recommended):
 
 ```powershell
 npm install
 npm run dev
 ```
 
-Open the URL shown by Vite (usually http://localhost:5173) in a browser.
+2. Open the URL printed by Vite (usually http://localhost:5173) and interact with the editor.
 
-Notes:
-- If you want to run a TypeScript type-check locally (not required for dev server because Vite does its own checks), run:
+Type checking (optional):
 
 ```powershell
 npx tsc --noEmit
 ```
 
-## Features
-- Pen and highlighter tools
-- Shapes (line, rectangle, ellipse, arrow, check, etc.)
-- Text boxes (editable DOM overlays)
-- Image attachments (drag/drop)
-- Zoom in / zoom out / reset
-- Page outline overlay (shows the real PDF edges when zoomed out)
+Configuration & customization
+- Page size: the default canvas uses A4 dimensions expressed in CSS units; you can change the page size in the layout CSS or in the canvas sizing logic.
+- Zoom: visual zoom is implemented at the viewport level. If you prefer to disable zoom, pass `scale={1}` to the `Canvas` component in `react-draw/src/App.tsx` or hide the toolbar zoom controls.
 
-## Zoom behavior (important)
+Testing and known issues
+- Manual testing recommended: zoom in/out, pan via scrollbars, draw strokes, add text and attachments, and export to verify fidelity.
+- Known: there are lint warnings about inline styles in a few places (small technical debt). There is an intermittent reported case where zoom may appear to reset during certain actions; instrumentation can be added to trace that.
 
-- Zoom is applied to the internal viewport and visible canvas size, not by transforming the outer `canvas-area` container. This preserves the logical page size (A4 layout), keeps export calculations stable, and lets scrollbars/panning work naturally.
-- Pointer coordinates are converted to logical canvas coordinates by dividing by the current `scale`. That mapping is implemented across drawing, dragging, and text placement.
-- A visible page outline has been added so users can easily see the true page edge when zoomed out.
+Contributing
+- Bug reports and pull requests welcome. For the zoom-reset issue, include a minimal reproduction (sequence of actions) so we can add targeted instrumentation.
 
-If you need the app to behave differently (for example, to scale the entire `canvas-area` container), be aware that will require changes to pointer mapping, export sizing, and layout — it's more invasive.
-
-
-## Known issues / TODO
-- Linter warnings remain for inline styles used in a few places (small technical debt). These don't break functionality but could be cleaned up.
-- Local dev: `npx tsc --noEmit` may fail if TypeScript dev dependency is not installed. Install with `npm install --save-dev typescript` to run it.
-
-## How to test zoom and page edge behavior
-
-1. Start the dev server (see Quick start).
-2. Use the toolbar zoom controls to zoom in and out.
-3. When zoomed out you should see a light border and a small "PDF page" label at the bottom-right of the page — this is the page outline overlay.
-4. Verify you can pan using scroll bars and that drawing, text insertion, and attachments align visually with the canvas content.
-
-
-## License
+License
 MIT
