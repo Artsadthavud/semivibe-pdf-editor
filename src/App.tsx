@@ -38,7 +38,13 @@ const SHAPE_TYPES: Array<{ id: ShapeType; label: string }> = [
   { id: 'line', label: 'Line' },
   { id: 'rectangle', label: 'Rectangle' },
   { id: 'ellipse', label: 'Circle' },
-  { id: 'arrow', label: 'Arrow' }
+  { id: 'arrow', label: 'Arrow' },
+  { id: 'check', label: 'Check' },
+  { id: 'cross', label: 'Cross' },
+  { id: 'plus', label: '+' },
+  { id: 'minus', label: '−' },
+  { id: 'times', label: '×' },
+  { id: 'divide', label: '÷' }
 ];
 
 const defaultText: TextDefaults = {

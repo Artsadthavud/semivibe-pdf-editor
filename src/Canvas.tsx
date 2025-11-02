@@ -168,6 +168,92 @@ const Canvas = ({
         ctx.stroke();
         break;
       }
+      case 'check': {
+        const left = Math.min(start.x, end.x);
+        const top = Math.min(start.y, end.y);
+        const w = Math.abs(end.x - start.x);
+        const h = Math.abs(end.y - start.y);
+        ctx.beginPath();
+        ctx.moveTo(left + 0.12 * w, top + 0.55 * h);
+        ctx.lineTo(left + 0.42 * w, top + 0.78 * h);
+        ctx.lineTo(left + 0.88 * w, top + 0.2 * h);
+        ctx.stroke();
+        break;
+      }
+      case 'cross': {
+        const left = Math.min(start.x, end.x);
+        const top = Math.min(start.y, end.y);
+        const w = Math.abs(end.x - start.x);
+        const h = Math.abs(end.y - start.y);
+        ctx.beginPath();
+        ctx.moveTo(left + 0.15 * w, top + 0.15 * h);
+        ctx.lineTo(left + 0.85 * w, top + 0.85 * h);
+        ctx.moveTo(left + 0.85 * w, top + 0.15 * h);
+        ctx.lineTo(left + 0.15 * w, top + 0.85 * h);
+        ctx.stroke();
+        break;
+      }
+      case 'plus': {
+        const cx = (start.x + end.x) / 2;
+        const cy = (start.y + end.y) / 2;
+        const w = Math.abs(end.x - start.x);
+        const h = Math.abs(end.y - start.y);
+        const len = Math.max(8, Math.min(w, h) * 0.6);
+        ctx.beginPath();
+        ctx.moveTo(cx - len / 2, cy);
+        ctx.lineTo(cx + len / 2, cy);
+        ctx.moveTo(cx, cy - len / 2);
+        ctx.lineTo(cx, cy + len / 2);
+        ctx.stroke();
+        break;
+      }
+      case 'minus': {
+        const cx = (start.x + end.x) / 2;
+        const cy = (start.y + end.y) / 2;
+        const w = Math.abs(end.x - start.x);
+        const len = Math.max(8, w * 0.6);
+        ctx.beginPath();
+        ctx.moveTo(cx - len / 2, cy);
+        ctx.lineTo(cx + len / 2, cy);
+        ctx.stroke();
+        break;
+      }
+      case 'times': {
+        const left = Math.min(start.x, end.x);
+        const top = Math.min(start.y, end.y);
+        const w = Math.abs(end.x - start.x);
+        const h = Math.abs(end.y - start.y);
+        ctx.beginPath();
+        ctx.moveTo(left + 0.15 * w, top + 0.15 * h);
+        ctx.lineTo(left + 0.85 * w, top + 0.85 * h);
+        ctx.moveTo(left + 0.85 * w, top + 0.15 * h);
+        ctx.lineTo(left + 0.15 * w, top + 0.85 * h);
+        ctx.stroke();
+        break;
+      }
+      case 'divide': {
+        const cx = (start.x + end.x) / 2;
+        const cy = (start.y + end.y) / 2;
+        const w = Math.abs(end.x - start.x);
+        const h = Math.abs(end.y - start.y);
+        const len = Math.max(8, Math.min(w, h) * 0.5);
+        ctx.beginPath();
+        ctx.moveTo(cx - len / 2, cy);
+        ctx.lineTo(cx + len / 2, cy);
+        ctx.stroke();
+        // dots
+        ctx.beginPath();
+        const dotR = Math.max(1.5, (ctx.lineWidth || 1) * 1.2);
+        ctx.arc(cx, cy - len, dotR, 0, Math.PI * 2);
+        ctx.fillStyle = stroke;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(cx, cy + len, dotR, 0, Math.PI * 2);
+        ctx.fill();
+        // reset fill style (not strictly necessary)
+        ctx.fillStyle = '#000';
+        break;
+      }
       default:
         break;
     }

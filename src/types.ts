@@ -14,7 +14,17 @@ export type Stroke = {
   opacity?: number;
 };
 
-export type ShapeType = 'line' | 'rectangle' | 'ellipse' | 'arrow';
+export type ShapeType =
+  | 'line'
+  | 'rectangle'
+  | 'ellipse'
+  | 'arrow'
+  | 'check'
+  | 'cross'
+  | 'plus'
+  | 'minus'
+  | 'times'
+  | 'divide';
 
 export type Shape = {
   id: string;
