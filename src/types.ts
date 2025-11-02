@@ -1,4 +1,4 @@
-export type ToolType = 'pointer' | 'pen' | 'highlighter' | 'text' | 'shape' | 'eraser';
+export type ToolType = 'pointer' | 'pen' | 'highlighter' | 'text' | 'shape' | 'eraser' | 'attach';
 
 export type Point = {
   x: number;
@@ -42,10 +42,21 @@ export type TextItem = {
   backgroundColor: string;
 };
 
+export type AttachItem = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  src: string; // object URL or remote URL
+  name?: string;
+};
+
 export type Page = {
   id: string;
   name: string;
   strokes: Stroke[];
   shapes: Shape[];
   texts: TextItem[];
+  attachments?: AttachItem[];
 };

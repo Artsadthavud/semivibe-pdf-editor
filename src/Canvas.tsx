@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
-import type { Page, Shape, ShapeType, Stroke, TextItem, ToolType } from './types';
+import type { Page, Shape, ShapeType, Stroke, TextItem, ToolType, AttachItem } from './types';
 // Using system cursors (crosshair/text/default) — remove SVG cursor imports to avoid bundler
 // resolution issues and keep behavior consistent across browsers.
 
@@ -19,9 +19,15 @@ type CanvasProps = {
   onStrokeEnd: (stroke: Stroke) => void;
   onShapeComplete: (shape: Shape) => void;
   onTextChange: (id: string, changes: Partial<TextItem>) => void;
-  onTextCreate: (x: number, y: number) => void;
+  onTextCreate: (x: number, y: number, initialText?: string) => void;
   onTextDelete: (id: string) => void;
   onTextSelect: (id: string | null) => void;
+  onAttachCreate?: (x: number, y: number, src: string, name?: string) => void;
+  onAttachChange?: (id: string, changes: Partial<AttachItem>) => void;
+  onAttachDelete?: (id: string) => void;
+  onAttachSelect?: (id: string | null) => void;
+  selectedAttachId?: string | null;
+  selectedAsset?: { id: string; name: string; url: string } | undefined;
   onEraseStroke?: (id: string) => void;
   onEraseShape?: (id: string) => void;
   eraserWidth?: number;
@@ -66,12 +72,19 @@ const Canvas = ({
   onTextCreate,
   onTextDelete,
   onTextSelect,
+  onAttachCreate,
+  onAttachChange,
+  onAttachDelete,
+  onAttachSelect,
+  selectedAttachId,
+  selectedAsset,
   onEraseStroke,
   onEraseShape,
   eraserWidth
 }: CanvasProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imageCache = useRef<Map<string, HTMLImageElement>>(new Map());
   const [size, setSize] = useState({ width: 0, height: 0 });
   const strokeDraft = useRef<Stroke | null>(null);
   const shapeDraft = useRef<Shape | null>(null);
@@ -169,6 +182,28 @@ const Canvas = ({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.scale(deviceRatio, deviceRatio);
 
+      // draw attachments first so strokes/shapes appear on top (write-over behavior)
+      (page.attachments ?? []).forEach((attach) => {
+        try {
+          const src = attach.src;
+          let img = imageCache.current.get(src);
+          if (!img) {
+            img = new Image();
+            img.src = src;
+            img.onload = () => {
+              // when image loads, trigger a redraw to show it
+              redraw();
+            };
+            imageCache.current.set(src, img);
+          }
+          if (img.complete) {
+            ctx.drawImage(img, attach.x, attach.y, attach.width, attach.height);
+          }
+        } catch (err) {
+          // ignore transient errors for invalid urls
+        }
+      });
+
       page.strokes.forEach((stroke) => drawStroke(ctx, stroke));
       page.shapes.forEach((shape) => drawShape(ctx, shape));
 
@@ -207,6 +242,40 @@ const Canvas = ({
     window.addEventListener('resize', resize);
     return () => window.removeEventListener('resize', resize);
   }, [redraw]);
+
+  // drag & drop for attachments
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    // prefer files (images) when dropped; some platforms include a text/plain
+    // entry (for example a blob URL) which should not create a text box for images.
+    const file = e.dataTransfer?.files?.[0];
+    if (file && file.type.startsWith('image/')) {
+      const url = URL.createObjectURL(file);
+      onAttachCreate?.(x, y, url, file.name);
+      return;
+    }
+
+    // if plain text was dropped (and no image file), create a text box with content
+    try {
+      const text = e.dataTransfer?.getData && e.dataTransfer.getData('text/plain');
+      if (text) {
+        onTextCreate?.(x, y, text);
+        return;
+      }
+    } catch (err) {
+      // some browsers may restrict type access
+    }
+  };
 
   // --- eraser helpers (must be after redraw is defined) ---
   const erasedIdsRef = useRef<Set<string>>(new Set());
@@ -320,6 +389,18 @@ const Canvas = ({
           onTextDelete(text.id);
         }
       });
+      // erase attachments if pointer inside attachment rect
+      (page.attachments ?? []).forEach((attach) => {
+        if (erasedIdsRef.current.has(attach.id)) return;
+        const left = attach.x;
+        const top = attach.y;
+        const right = attach.x + attach.width;
+        const bottom = attach.y + attach.height;
+        if (x >= left && x <= right && y >= top && y <= bottom) {
+          erasedIdsRef.current.add(attach.id);
+          onAttachDelete?.(attach.id);
+        }
+      });
       redraw();
     },
     [onEraseShape, onEraseStroke, page.shapes, page.strokes, eraserWidth, redraw]
@@ -365,7 +446,13 @@ const Canvas = ({
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
 
-    if (tool === 'pointer') {
+    if (tool === 'pointer') return;
+
+    if (tool === 'attach') {
+      // if a palette asset is selected, place it where the user clicked
+      if (selectedAsset) {
+        onAttachCreate?.(x, y, selectedAsset.url, selectedAsset.name);
+      }
       return;
     }
 
@@ -396,13 +483,14 @@ const Canvas = ({
 
     const strokeColor = tool === 'highlighter' ? highlighterColor : penColor;
     const strokeWidth = tool === 'highlighter' ? highlighterWidth : penWidth;
+    const strokeTool = tool === 'highlighter' ? 'highlighter' : 'pen';
     const newStroke: Stroke = {
       id: createId(),
-      tool,
+      tool: strokeTool,
       color: strokeColor,
       thickness: strokeWidth,
       points: [{ x, y }],
-      opacity: tool === 'highlighter' ? highlightOpacity : undefined
+      opacity: strokeTool === 'highlighter' ? highlightOpacity : undefined
     };
     strokeDraft.current = newStroke;
     redraw({ stroke: newStroke });
@@ -452,13 +540,30 @@ const Canvas = ({
       const rect = container.getBoundingClientRect();
 
       if (state.type === 'move') {
-        onTextChange(state.id, {
-          x: event.clientX - rect.left - state.offsetX,
-          y: event.clientY - rect.top - state.offsetY
-        });
+        const x = event.clientX - rect.left - state.offsetX;
+        const y = event.clientY - rect.top - state.offsetY;
+        // decide whether this id is a text or an attachment
+        const isText = page.texts.some((t) => t.id === state.id);
+        if (isText) {
+          onTextChange(state.id, { x, y });
+        } else {
+          onAttachChange?.(state.id, { x, y });
+        }
       } else {
         const width = Math.max(120, state.startWidth + (event.clientX - rect.left - state.originX));
-        onTextChange(state.id, { width });
+        const isText = page.texts.some((t) => t.id === state.id);
+        if (isText) {
+          onTextChange(state.id, { width });
+        } else {
+          // maintain aspect ratio for attachments: scale height in proportion
+          const attach = page.attachments?.find((a) => a.id === state.id);
+          if (attach) {
+            const ratio = attach.height / Math.max(attach.width, 1);
+            onAttachChange?.(state.id, { width, height: Math.max(60, Math.round(width * ratio)) });
+          } else {
+            onAttachChange?.(state.id, { width });
+          }
+        }
       }
     };
 
@@ -475,7 +580,7 @@ const Canvas = ({
   }, [onTextChange]);
 
   return (
-    <div className="canvas-area" ref={containerRef} onPointerDown={handleCanvasClick}>
+  <div className="canvas-area" ref={containerRef} onPointerDown={handleCanvasClick} onDrop={handleDrop} onDragOver={handleDragOver}>
       {/** use system cursors (crosshair/text/default) per current preference */}
       {
         (() => {
@@ -520,6 +625,39 @@ const Canvas = ({
                 type: 'resize',
                 id: text.id,
                 startWidth: text.width,
+                originX: event.clientX - rect.left
+              };
+            }}
+          />
+        ))}
+        {page.attachments?.map((attach) => (
+          <AttachmentBox
+            key={attach.id}
+            item={attach}
+            selected={attach.id === selectedAttachId}
+            tool={tool}
+            onSelect={() => onAttachSelect?.(attach.id)}
+            onChange={(changes) => onAttachChange?.(attach.id, changes)}
+            onDelete={() => onAttachDelete?.(attach.id)}
+            onDrag={(event) => {
+              const container = containerRef.current;
+              if (!container) return;
+              const rect = container.getBoundingClientRect();
+              dragState.current = {
+                type: 'move',
+                id: attach.id,
+                offsetX: event.clientX - rect.left - attach.x,
+                offsetY: event.clientY - rect.top - attach.y
+              };
+            }}
+            onResize={(event) => {
+              const container = containerRef.current;
+              if (!container) return;
+              const rect = container.getBoundingClientRect();
+              dragState.current = {
+                type: 'resize',
+                id: attach.id,
+                startWidth: attach.width,
                 originX: event.clientX - rect.left
               };
             }}
@@ -630,6 +768,57 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
             <span>Bg</span>
           </button>
         </div>
+      ) : null}
+    </div>
+  );
+};
+
+type AttachmentBoxProps = {
+  item: AttachItem;
+  selected: boolean;
+  tool: ToolType;
+  onSelect: () => void;
+  onChange: (changes: Partial<AttachItem>) => void;
+  onDelete: () => void;
+  onDrag: (event: React.PointerEvent<HTMLElement>) => void;
+  onResize: (event: React.PointerEvent<HTMLDivElement>) => void;
+};
+
+const AttachmentBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, onResize }: AttachmentBoxProps) => {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    // nothing to sync for now
+  }, [item.src]);
+
+  return (
+    <div
+      ref={ref}
+      className={clsx('attachment-box', { selected })}
+      style={{ left: item.x, top: item.y, width: item.width, height: item.height }}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        onSelect();
+        if (tool === 'pointer') {
+          event.preventDefault();
+          onDrag(event);
+        }
+      }}
+    >
+      {/* image is now rendered on the canvas for write-over; overlay shows selection/controls only */}
+      {selected ? (
+        <>
+          <div
+            className="attachment__resize"
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              onResize(event);
+            }}
+          />
+          <button type="button" className="attachment__delete" onClick={(e) => { e.stopPropagation(); onDelete(); }} aria-label="Remove attachment">×</button>
+        </>
       ) : null}
     </div>
   );

@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import clsx from 'clsx';
 import Canvas from './Canvas';
-import type { Page, Shape, ShapeType, Stroke, TextItem, ToolType } from './types';
+import type { Page, Shape, ShapeType, Stroke, TextItem, ToolType, AttachItem } from './types';
 
 type TextDefaults = {
   color: string;
@@ -55,7 +55,8 @@ const createPage = (index: number): Page => ({
   name: `Page ${index + 1}`,
   strokes: [],
   shapes: [],
-  texts: []
+  texts: [],
+  attachments: []
 });
 
 const createText = (x: number, y: number, defaults: TextDefaults): TextItem => ({
@@ -81,6 +82,7 @@ const TOOL_META: Array<{ id: ToolType; label: string; hint: string }> = [
   { id: 'highlighter', label: 'Highlight', hint: 'Highlighter (H)' },
   { id: 'shape', label: 'Shapes', hint: 'Shapes (S)' },
   { id: 'text', label: 'Text', hint: 'Text tool (T)' },
+  { id: 'attach', label: 'Attach', hint: 'Attach (A)' },
   { id: 'eraser', label: 'Eraser', hint: 'Eraser (E)' }
 ];
 
@@ -98,8 +100,29 @@ const App = () => {
   const [shapeColor, setShapeColor] = useState('#1d4ed8');
   const [shapeWidth, setShapeWidth] = useState(3);
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+  const [selectedAttachId, setSelectedAttachId] = useState<string | null>(null);
   const [textDefaults, setTextDefaults] = useState<TextDefaults>(defaultText);
   const [eraserWidth, setEraserWidth] = useState(24);
+  const [uploadedAssets, setUploadedAssets] = useState<Array<{ id: string; name: string; url: string }>>([]);
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const objectUrlsRef = useRef<Set<string>>(new Set());
+
+  // load project-scoped assets from src/assets at build time (Vite import.meta.glob)
+  useEffect(() => {
+    // This uses Vite's import.meta.glob to bundle image URLs from src/assets.
+    // It runs at build/dev time and returns a map of path->url when eager: true.
+    try {
+      // @ts-ignore - import.meta.glob types are provided by Vite; ignore TS in plain tsc runs
+      const modules = import.meta.glob('/src/assets/*.{png,jpg,jpeg,webp,gif,svg}', { as: 'url', eager: true });
+      const entries = Object.entries(modules) as Array<[string, string]>;
+      if (entries.length > 0) {
+        const next = entries.map(([path, url]) => ({ id: createId(), name: path.split('/').pop() ?? path, url }));
+        setUploadedAssets((prev) => [...next, ...prev]);
+      }
+    } catch (e) {
+      // import.meta.glob not available in non-vite environments; ignore silently
+    }
+  }, []);
 
   const activePage = pages.find((page) => page.id === activePageId) ?? pages[0];
 
@@ -241,10 +264,12 @@ const App = () => {
     }
   };
 
-  const handleTextCreate = (x: number, y: number) => {
+  // create text, optionally with initial content (used for drop)
+  const handleTextCreate = (x: number, y: number, initialText?: string) => {
     const safeX = Math.max(24, x - textDefaults.width / 2);
     const safeY = Math.max(24, y);
     const text = createText(safeX, safeY, textDefaults);
+    if (initialText) text.text = initialText;
     updateActivePage((page) => ({
       ...page,
       texts: [...page.texts, text]
@@ -261,6 +286,70 @@ const App = () => {
     if (selectedTextId === id) {
       setSelectedTextId(null);
     }
+  };
+
+  // asset upload / palette
+  const handleFilesAdded = (files: FileList | null) => {
+    if (!files) return;
+    const next: Array<{ id: string; name: string; url: string }> = [];
+    for (let i = 0; i < files.length; i += 1) {
+      const f = files[i];
+      if (!f.type.startsWith('image/')) continue;
+      const url = URL.createObjectURL(f);
+      next.push({ id: createId(), name: f.name, url });
+      objectUrlsRef.current.add(url);
+    }
+    if (next.length > 0) setUploadedAssets((prev) => [...prev, ...next]);
+  };
+
+  const handleSelectAsset = (id: string | null) => {
+    setSelectedAssetId(id);
+    if (id) setTool('attach');
+  };
+
+  // Attach handlers
+  const handleAttachCreate = (x: number, y: number, src: string, name?: string) => {
+    const id = createId();
+    const attach: AttachItem = {
+      id,
+      x,
+      y,
+      width: 240,
+      height: 160,
+      src,
+      name: name ?? ''
+    };
+    // track object URLs so we can revoke them when deleted
+    if (src.startsWith('blob:')) objectUrlsRef.current.add(src);
+    updateActivePage((page) => ({ ...page, attachments: [...(page.attachments ?? []), attach] }));
+    setSelectedAttachId(id);
+    setTool('pointer');
+  };
+
+  const handleAttachChange = (id: string, changes: Partial<AttachItem>) => {
+    updateActivePage((page) => ({
+      ...page,
+      attachments: (page.attachments ?? []).map((a) => (a.id === id ? { ...a, ...changes } : a))
+    }));
+  };
+
+  const handleAttachDelete = (id: string) => {
+    // revoke object URL if we created it earlier
+    const attach = activePage.attachments?.find((a) => a.id === id);
+    if (attach && objectUrlsRef.current.has(attach.src)) {
+      try {
+        URL.revokeObjectURL(attach.src);
+      } catch (e) {
+        // ignore
+      }
+      objectUrlsRef.current.delete(attach.src);
+    }
+    updateActivePage((page) => ({ ...page, attachments: (page.attachments ?? []).filter((a) => a.id !== id) }));
+    if (selectedAttachId === id) setSelectedAttachId(null);
+  };
+
+  const handleAttachSelect = (id: string | null) => {
+    setSelectedAttachId(id);
   };
 
   const handleTextSelect = (id: string | null) => {
@@ -328,11 +417,22 @@ const App = () => {
   };
 
   const handleClearPage = () => {
+    // revoke any object URLs used on this page
+    const attachmentsToRevoke = activePage.attachments ?? [];
+    attachmentsToRevoke.forEach((a) => {
+      if (objectUrlsRef.current.has(a.src)) {
+        try {
+          URL.revokeObjectURL(a.src);
+        } catch (e) {}
+        objectUrlsRef.current.delete(a.src);
+      }
+    });
     updateActivePage((page) => ({
       ...page,
       strokes: [],
       shapes: [],
-      texts: []
+      texts: [],
+      attachments: []
     }));
     setSelectedTextId(null);
   };
@@ -392,21 +492,28 @@ const App = () => {
         <div className="toolbar-row toolbar-row--cards">
           <section className="control-card">
             <div className="card-header">
-              <span className="card-label">Pen</span>
-              <span className="card-value">{penWidth}px</span>
+              <span className="card-label">Pen / Highlighter</span>
+              <span className="card-value">{tool === 'highlighter' ? `${highlightWidth}px · ${Math.round(highlightOpacity * 100)}%` : `${penWidth}px`}</span>
             </div>
             <div className="card-body card-body--stacked">
               <div className="setting-group">
+                <span className="setting-label">Mode</span>
+                <div className="shape-buttons">
+                  <button type="button" className={clsx('shape-button', { active: tool === 'pen' })} onClick={() => setTool('pen')}>Pen</button>
+                  <button type="button" className={clsx('shape-button', { active: tool === 'highlighter' })} onClick={() => setTool('highlighter')}>Highlighter</button>
+                </div>
+              </div>
+              <div className="setting-group">
                 <span className="setting-label">Colour</span>
                 <div className="swatches">
-                  {PEN_COLORS.map((color) => (
+                  {(tool === 'highlighter' ? HIGHLIGHT_COLORS : PEN_COLORS).map((color) => (
                     <button
                       key={color}
                       type="button"
-                      className={clsx('swatch', { active: penColor === color })}
+                      className={clsx('swatch', { active: (tool === 'highlighter' ? highlightColor === color : penColor === color) })}
                       style={{ backgroundColor: color }}
-                      onClick={() => setPenColor(color)}
-                      aria-label={`Pen colour ${color}`}
+                      onClick={() => (tool === 'highlighter' ? setHighlightColor(color) : setPenColor(color))}
+                      aria-label={`Colour ${color}`}
                     />
                   ))}
                 </div>
@@ -416,67 +523,31 @@ const App = () => {
                 <input
                   className="density-slider"
                   type="range"
-                  min={1}
-                  max={30}
-                  value={penWidth}
-                  onChange={(event) => setPenWidth(Number(event.target.value))}
-                  aria-label="Pen thickness"
+                  min={tool === 'highlighter' ? 8 : 1}
+                  max={tool === 'highlighter' ? 60 : 30}
+                  value={tool === 'highlighter' ? highlightWidth : penWidth}
+                  onChange={(event) => (tool === 'highlighter' ? setHighlightWidth(Number(event.target.value)) : setPenWidth(Number(event.target.value)))}
+                  aria-label="Tool thickness"
                 />
               </div>
-            </div>
-          </section>
-
-          <section className="control-card">
-            <div className="card-header">
-              <span className="card-label">Highlight</span>
-              <span className="card-value">
-                {highlightWidth}px · {Math.round(highlightOpacity * 100)}%
-              </span>
-            </div>
-            <div className="card-body card-body--stacked">
-              <div className="setting-group">
-                <span className="setting-label">Colour</span>
-                <div className="swatches">
-                  {HIGHLIGHT_COLORS.map((color) => (
-                    <button
-                      key={color}
-                      type="button"
-                      className={clsx('swatch', { active: highlightColor === color })}
-                      style={{ backgroundColor: color }}
-                      onClick={() => setHighlightColor(color)}
-                      aria-label={`Highlight colour ${color}`}
-                    />
-                  ))}
+              {tool === 'highlighter' ? (
+                <div className="setting-group">
+                  <span className="setting-label">Intensity</span>
+                  <div className="opacity-pills">
+                    {HIGHLIGHT_OPACITIES.map((entry) => (
+                      <button
+                        key={entry.value}
+                        type="button"
+                        className={clsx('pill', { active: highlightOpacity === entry.value })}
+                        onClick={() => setHighlightOpacity(entry.value)}
+                        aria-pressed={highlightOpacity === entry.value}
+                      >
+                        {entry.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              <div className="setting-group">
-                <span className="setting-label">Thickness</span>
-                <input
-                  className="density-slider"
-                  type="range"
-                  min={8}
-                  max={60}
-                  value={highlightWidth}
-                  onChange={(event) => setHighlightWidth(Number(event.target.value))}
-                  aria-label="Highlight thickness"
-                />
-              </div>
-              <div className="setting-group">
-                <span className="setting-label">Intensity</span>
-                <div className="opacity-pills">
-                  {HIGHLIGHT_OPACITIES.map((entry) => (
-                    <button
-                      key={entry.value}
-                      type="button"
-                      className={clsx('pill', { active: highlightOpacity === entry.value })}
-                      onClick={() => setHighlightOpacity(entry.value)}
-                      aria-pressed={highlightOpacity === entry.value}
-                    >
-                      {entry.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              ) : null}
             </div>
           </section>
 
@@ -527,6 +598,44 @@ const App = () => {
                   onChange={(event) => setShapeWidth(Number(event.target.value))}
                   aria-label="Shape stroke width"
                 />
+              </div>
+            </div>
+          </section>
+
+          <section className="control-card">
+            <div className="card-header">
+              <span className="card-label">Attach</span>
+              <span className="card-value">Upload & place</span>
+            </div>
+            <div className="card-body card-body--stacked">
+              <div className="setting-group">
+                <span className="setting-label">Upload</span>
+                <div className="attach-card">
+                  <label className="attach-upload">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      style={{ display: 'none' }}
+                      onChange={(e) => handleFilesAdded(e.target.files)}
+                    />
+                    + Add images
+                  </label>
+                  {/* folder selection removed: project-assets and uploads are supported via the other controls */}
+                  <div>
+                    {uploadedAssets.map((asset) => (
+                      <button
+                        key={asset.id}
+                        type="button"
+                        className={clsx('attach-thumb', { selected: selectedAssetId === asset.id })}
+                        onClick={() => handleSelectAsset(asset.id)}
+                        title={`Place ${asset.name}`}
+                      >
+                        <img src={asset.url} alt={asset.name} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           </section>
@@ -672,6 +781,12 @@ const App = () => {
           onEraseStroke={handleEraseStroke}
           onEraseShape={handleEraseShape}
           eraserWidth={eraserWidth}
+          onAttachCreate={handleAttachCreate}
+          onAttachChange={handleAttachChange}
+          onAttachDelete={handleAttachDelete}
+          onAttachSelect={handleAttachSelect}
+          selectedAttachId={selectedAttachId}
+          selectedAsset={selectedAssetId ? uploadedAssets.find((a) => a.id === selectedAssetId) : undefined}
         />
       </main>
 
