@@ -207,6 +207,7 @@ input {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+  flex: 1 1 160px;
 }
 
 .text-control .text-style,
@@ -371,20 +372,65 @@ input {
   right: 0;
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  background: #111827;
+  gap: 0.45rem;
+  background: rgba(15, 23, 42, 0.92);
   color: white;
-  padding: 0.3rem 0.6rem;
+  padding: 0.35rem 0.6rem;
   border-radius: 999px;
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.4);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.3);
 }
 
-.text-box__toolbar button {
+.text-box__toolbar-btn {
   border: none;
   background: transparent;
   color: inherit;
   cursor: pointer;
   font-size: 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  transition: transform 0.15s ease;
+}
+
+.text-box__toolbar-btn:hover {
+  transform: translateY(-1px);
+}
+
+.text-box__toolbar-chip {
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.12rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.text-box__toolbar-chip .chip-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  background: transparent;
+}
+
+.text-box__toolbar-chip.active {
+  background: #2563eb;
+  color: white;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.45);
+}
+
+.text-box__toolbar-chip.active .chip-indicator {
+  border-color: white;
+  background: white;
 }
 
 .text-box__resize {

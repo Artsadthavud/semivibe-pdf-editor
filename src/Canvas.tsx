@@ -349,7 +349,12 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
       />
       {selected ? (
         <div className="text-box__toolbar">
-          <button type="button" onClick={onDelete} aria-label="Remove text">
+          <button
+            type="button"
+            className="text-box__toolbar-btn"
+            onClick={onDelete}
+            aria-label="Remove text"
+          >
             🗑
           </button>
           <div
@@ -361,10 +366,13 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
           />
           <button
             type="button"
+            className={clsx('text-box__toolbar-chip', { active: item.background })}
             onClick={() => onChange({ background: !item.background })}
-            aria-label={item.background ? 'Hide background' : 'Show background'}
+            aria-pressed={item.background}
+            aria-label={item.background ? 'Hide background fill' : 'Show background fill'}
           >
-            {item.background ? 'Bg-' : 'Bg+'}
+            <span className="chip-indicator" aria-hidden />
+            <span>Bg</span>
           </button>
         </div>
       ) : null}

@@ -196,14 +196,15 @@ const App = () => {
   const handleRemovePage = (id: string) => {
     setPages((prev) => {
       if (prev.length === 1) return prev;
-      const filtered = prev.filter((page) => page.id !== id);
-      filtered.forEach((page, index) => {
-        page.name = `Page ${index + 1}`;
-      });
+      let filtered = prev.filter((page) => page.id !== id);
+      filtered = filtered.map((page, index) => ({
+        ...page,
+        name: `Page ${index + 1}`
+      }));
       if (id === activePageId) {
         setActivePageId(filtered[filtered.length - 1]?.id ?? filtered[0].id);
       }
-      return [...filtered];
+      return filtered;
     });
     setSelectedTextId(null);
   };
