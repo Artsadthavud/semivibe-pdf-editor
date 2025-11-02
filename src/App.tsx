@@ -129,6 +129,8 @@ const App = () => {
   const [importingPdf, setImportingPdf] = useState(false);
   const [importProgress, setImportProgress] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
   const [workerStatus, setWorkerStatus] = useState<'available' | 'disabled' | 'failed' | 'unknown'>('unknown');
+  // zoom (scale) for the workspace canvas
+  const [zoom, setZoom] = useState<number>(1);
 
   // load project-scoped assets from src/assets at build time (Vite import.meta.glob)
   useEffect(() => {
@@ -1210,6 +1212,35 @@ const App = () => {
               Clear page
             </button>
             <button type="button" className="toolbar-action" onClick={handleExportPdf}>Export PDF</button>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginLeft: 6 }}>
+              <button
+                type="button"
+                className="toolbar-action"
+                onClick={() => setZoom((z) => Math.max(0.25, Math.round((z - 0.1) * 100) / 100))}
+                title="Zoom out"
+                aria-label="Zoom out"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                className="toolbar-action"
+                onClick={() => setZoom(1)}
+                title="Reset zoom"
+                aria-label="Reset zoom"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                className="toolbar-action"
+                onClick={() => setZoom((z) => Math.min(4, Math.round((z + 0.1) * 100) / 100))}
+                title="Zoom in"
+                aria-label="Zoom in"
+              >
+                +
+              </button>
+            </div>
           </div>
           {/* worker availability indicator */}
           <div
@@ -1588,6 +1619,7 @@ const App = () => {
           onAttachSelect={handleAttachSelect}
           selectedAttachId={selectedAttachId}
           selectedAsset={selectedAssetId ? uploadedAssets.find((a) => a.id === selectedAssetId) : undefined}
+          scale={zoom}
         />
       </main>
 
