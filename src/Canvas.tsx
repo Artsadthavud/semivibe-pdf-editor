@@ -810,7 +810,7 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
             type="button"
             className={clsx('text-box__toolbar-chip', { active: item.background })}
             onClick={() => onChange({ background: !item.background })}
-            aria-pressed={item.background}
+              aria-pressed={item.background ? 'true' : 'false'}
             aria-label={item.background ? 'Hide background fill' : 'Show background fill'}
           >
             <span className="chip-indicator" aria-hidden />
@@ -830,7 +830,7 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
                 onChange({ singleLine: false });
               }
             }}
-            aria-pressed={!!item.singleLine}
+            aria-pressed={item.singleLine ? 'true' : 'false'}
             aria-label={item.singleLine ? 'Disable single-line' : 'Enable single-line'}
           >
             1-line

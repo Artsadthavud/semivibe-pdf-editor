@@ -8,6 +8,8 @@ type PdfImport = {
   id: string;
   name: string;
   pageIds: string[];
+  // keep original PDF bytes so we can later embed pages losslessly during export
+  data?: Uint8Array;
 };
 
 type TextDefaults = {
@@ -181,7 +183,40 @@ const App = () => {
 
       const pdfDoc = await PDFDocument.create();
 
-      for (const pageModel of pages) {
+      // We'll preserve original PDF pages (lossless) when possible: if a page was imported
+      // from a PDF and has no user annotations (strokes/shapes/texts/extra attachments) then
+      // copy the page from the original PDF into the export. Otherwise fall back to rasterizing
+      // the rendered page at high resolution (A4 @ DPI) to preserve visual fidelity.
+      const importDocCache = new Map<string, any>();
+      for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+        const pageModel = pages[pageIndex];
+        const imp = pageModel.pdfImportGroup ? pdfImports.find((it) => it.id === pageModel.pdfImportGroup) : undefined;
+        const isPureImportedPage = !!(
+          imp &&
+          imp.data &&
+          (pageModel.strokes?.length ?? 0) === 0 &&
+          (pageModel.shapes?.length ?? 0) === 0 &&
+          (pageModel.texts?.length ?? 0) === 0 &&
+          (pageModel.attachments ?? []).every((a) => a.pdfBackgroundGroup === pageModel.pdfImportGroup)
+        );
+
+        if (isPureImportedPage && imp) {
+          // load source PDF once per import
+          let srcPdf: any = importDocCache.get(imp.id);
+          if (!srcPdf) {
+            srcPdf = await PDFDocument.load(imp.data as Uint8Array);
+            importDocCache.set(imp.id, srcPdf);
+          }
+          const srcPageIndex = imp.pageIds.indexOf(pageModel.id);
+          if (srcPageIndex >= 0) {
+            const [copied] = await pdfDoc.copyPages(srcPdf, [srcPageIndex]);
+            // add copied page to target doc (preserves vector content)
+            pdfDoc.addPage(copied);
+            continue;
+          }
+        }
+
+        // Fallback: rasterize the whole page at A4 @ DPI (preserves visual look for annotated pages)
         const off = document.createElement('canvas');
         off.width = targetW;
         off.height = targetH;
@@ -189,6 +224,13 @@ const App = () => {
         if (!ctx) throw new Error('Unable to create export canvas');
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, off.width, off.height);
+
+        // draw attachments, shapes, strokes and text scaled to the target A4 canvas
+        const container = document.querySelector('.canvas-area') as HTMLElement | null;
+        const srcWidth = container ? container.getBoundingClientRect().width : 210;
+        const srcHeight = container ? container.getBoundingClientRect().height : 297;
+        const scaleX = targetW / srcWidth;
+        const scaleY = targetH / srcHeight;
 
         for (const attach of pageModel.attachments ?? []) {
           try {
@@ -552,7 +594,11 @@ const App = () => {
       setImportProgress({ current: 0, total: 0 });
   setWorkerStatus((typeof window !== 'undefined' && (window as any).__PDF_WORKER_URL) ? 'available' : 'unknown');
 
-      const arrayBuffer = await file.arrayBuffer();
+  const arrayBuffer = await file.arrayBuffer();
+  // Make an explicit copy of the PDF bytes immediately so that if pdf.js
+  // transfers the original ArrayBuffer to a worker (detaching it), we still
+  // have an independent copy to use for lossless export/copyPages.
+  const originalBytes = new Uint8Array(arrayBuffer).slice();
       const pdfjs = await import('pdfjs-dist');
       if (!pdfjs) {
         throw new Error('Unable to load pdfjs-dist module.');
@@ -602,7 +648,7 @@ const App = () => {
             }
           }
 
-      let loading: any;
+  let loading: any;
       if (GlobalWorkerOptions) {
         if (workerUrl) {
           try {
@@ -623,20 +669,29 @@ const App = () => {
         setWorkerStatus('disabled');
         loading = getDocument({ data: arrayBuffer, disableWorker: true } as any);
       }
-      const pdf = await loading.promise;
-      const groupId = createId();
+  const pdf = await loading.promise;
+  const groupId = createId();
       const pageIds: string[] = [];
       // clone current pages to mutate locally
       const localPages = pages.slice();
       const container = document.querySelector('.canvas-area') as HTMLElement | null;
       const containerWidth = container ? container.getBoundingClientRect().width : 800;
-      // initialize progress counters
-      setImportProgress({ current: 0, total: pdf.numPages });
+  // Render imported PDF pages at high resolution to preserve quality.
+  // Use A4 @ 300 DPI as a target rasterization size to avoid visible quality loss when attaching.
+  const a4mm = { w: 210, h: 297 };
+  const DPI = 300;
+  const mmToInch = (mm: number) => mm / 25.4;
+  const targetW = Math.round(mmToInch(a4mm.w) * DPI);
+  const targetH = Math.round(mmToInch(a4mm.h) * DPI);
+  // initialize progress counters
+  setImportProgress({ current: 0, total: pdf.numPages });
       for (let p = 1; p <= pdf.numPages; p += 1) {
         const pdfPage = await pdf.getPage(p);
-        const viewport = pdfPage.getViewport({ scale: 1 });
-        const scale = Math.max(1, containerWidth / viewport.width);
-        const renderViewport = pdfPage.getViewport({ scale });
+  const viewport = pdfPage.getViewport({ scale: 1 });
+  // choose a high rasterization scale so the resulting image preserves vector quality
+  // scale to A4@300dpi target width relative to the PDF page width
+  const scale = Math.max(1, targetW / viewport.width);
+  const renderViewport = pdfPage.getViewport({ scale });
         const canvas = document.createElement('canvas');
         canvas.width = Math.round(renderViewport.width);
         canvas.height = Math.round(renderViewport.height);
@@ -645,7 +700,7 @@ const App = () => {
         await pdfPage.render({ canvasContext: ctx, viewport: renderViewport }).promise;
         const blob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
         if (!blob) continue;
-        const url = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(blob);
         objectUrlsRef.current.add(url);
 
         // ensure localPages has a slot for this page
@@ -655,13 +710,16 @@ const App = () => {
           localPages.push(np);
         }
 
-        // create attachment that covers the full page area
+        // create attachment that covers the full page area (store sizes in app CSS pixels)
+        const displayWidth = Math.round(containerWidth);
+        const displayHeight = Math.round((renderViewport.height / renderViewport.width) * displayWidth);
         const attach: AttachItem = {
           id: createId(),
           x: 0,
           y: 0,
-          width: canvas.width,
-          height: canvas.height,
+          // width/height are in CSS pixels (canvas drawing uses CSS coordinate space)
+          width: displayWidth,
+          height: displayHeight,
           src: url,
           name: `${file.name} (page ${p})`,
           locked: true,
@@ -677,8 +735,8 @@ const App = () => {
       }
 
       // commit pages and record import group
-      setPages(localPages.map((pg, idx) => ({ ...pg, name: `Page ${idx + 1}` })));
-      setPdfImports((prev) => [...prev, { id: groupId, name: file.name, pageIds }]);
+  setPages(localPages.map((pg, idx) => ({ ...pg, name: `Page ${idx + 1}` })));
+  setPdfImports((prev) => [...prev, { id: groupId, name: file.name, pageIds, data: originalBytes }]);
       // select first page of the imported PDF
       if (pageIds.length > 0) setActivePageId(pageIds[0]);
       // done
@@ -1184,6 +1242,7 @@ const App = () => {
                     className={clsx('toggle-pill', { active: textDefaults.background })}
                     onClick={() => handleTextStyleChange({ background: !textDefaults.background })}
                     aria-pressed={textDefaults.background ? 'true' : 'false'}
+                    aria-label={textDefaults.background ? 'Hide background fill' : 'Show background fill'}
                   >
                     {textDefaults.background ? 'Visible' : 'Hidden'}
                   </button>
