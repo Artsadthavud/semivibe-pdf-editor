@@ -117,6 +117,10 @@ const App = () => {
   const objectUrlsRef = useRef<Set<string>>(new Set());
   const [pdfImports, setPdfImports] = useState<PdfImport[]>([]);
   const toolbarRef = useRef<HTMLElement | null>(null);
+  // PDF import progress / worker status
+  const [importingPdf, setImportingPdf] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
+  const [workerStatus, setWorkerStatus] = useState<'available' | 'disabled' | 'failed' | 'unknown'>('unknown');
 
   // load project-scoped assets from src/assets at build time (Vite import.meta.glob)
   useEffect(() => {
@@ -543,6 +547,11 @@ const App = () => {
   // Import PDF and render pages to background attachments (uses pdfjs)
   const handlePdfUpload = async (file: File) => {
     try {
+  // begin import progress
+  setImportingPdf(true);
+      setImportProgress({ current: 0, total: 0 });
+  setWorkerStatus((typeof window !== 'undefined' && (window as any).__PDF_WORKER_URL) ? 'available' : 'unknown');
+
       const arrayBuffer = await file.arrayBuffer();
       const pdfjs = await import('pdfjs-dist');
       if (!pdfjs) {
@@ -584,6 +593,7 @@ const App = () => {
                   workerUrl = url;
                   // also expose globally for other code that may look for it
                   if (typeof window !== 'undefined') (window as any).__PDF_WORKER_URL = url;
+                  setWorkerStatus('available');
                   break;
                 }
               } catch (e) {
@@ -599,12 +609,18 @@ const App = () => {
             GlobalWorkerOptions.workerSrc = workerUrl;
             loading = getDocument({ data: arrayBuffer });
           } catch (e) {
+            // worker assignment failed; fall back to main-thread rendering
+            setWorkerStatus('failed');
             loading = getDocument({ data: arrayBuffer, disableWorker: true } as any);
           }
         } else {
+          // no worker url found, run on main thread
+          setWorkerStatus('disabled');
           loading = getDocument({ data: arrayBuffer, disableWorker: true } as any);
         }
       } else {
+        // pdfjs has no GlobalWorkerOptions available; render on main thread
+        setWorkerStatus('disabled');
         loading = getDocument({ data: arrayBuffer, disableWorker: true } as any);
       }
       const pdf = await loading.promise;
@@ -614,7 +630,8 @@ const App = () => {
       const localPages = pages.slice();
       const container = document.querySelector('.canvas-area') as HTMLElement | null;
       const containerWidth = container ? container.getBoundingClientRect().width : 800;
-
+      // initialize progress counters
+      setImportProgress({ current: 0, total: pdf.numPages });
       for (let p = 1; p <= pdf.numPages; p += 1) {
         const pdfPage = await pdf.getPage(p);
         const viewport = pdfPage.getViewport({ scale: 1 });
@@ -655,6 +672,8 @@ const App = () => {
         target.attachments = [attach, ...(target.attachments ?? [])];
         target.pdfImportGroup = groupId;
         pageIds.push(target.id);
+        // update progress after each page is processed
+        setImportProgress({ current: p, total: pdf.numPages });
       }
 
       // commit pages and record import group
@@ -662,9 +681,14 @@ const App = () => {
       setPdfImports((prev) => [...prev, { id: groupId, name: file.name, pageIds }]);
       // select first page of the imported PDF
       if (pageIds.length > 0) setActivePageId(pageIds[0]);
+      // done
+      setImportingPdf(false);
     } catch (err) {
       // eslint-disable-next-line no-alert
       alert('PDF import failed: ' + (err as Error).message);
+      setImportingPdf(false);
+      setImportProgress({ current: 0, total: 0 });
+      setWorkerStatus('failed');
     }
   };
 
@@ -915,6 +939,25 @@ const App = () => {
             </button>
             <button type="button" className="toolbar-action" onClick={handleExportPdf}>Export PDF</button>
           </div>
+          {/* worker availability indicator */}
+          <div
+            className={"worker-badge " + (workerStatus || 'unknown')}
+            title={
+              workerStatus === 'available'
+                ? 'PDF worker available (imports use a worker)'
+                : workerStatus === 'failed'
+                ? 'PDF worker attempted but failed, falling back to main-thread rendering'
+                : workerStatus === 'disabled'
+                ? 'No PDF worker available; rendering will run on the main thread'
+                : 'PDF worker status unknown'
+            }
+            aria-live="polite"
+          >
+            {workerStatus === 'available' && 'Worker: on'}
+            {workerStatus === 'failed' && 'Worker: failed (fallback)'}
+            {workerStatus === 'disabled' && 'Worker: off'}
+            {workerStatus === 'unknown' && 'Worker: ?'}
+          </div>
         </div>
 
         <div className="toolbar-row toolbar-row--cards">
@@ -967,8 +1010,7 @@ const App = () => {
                         key={entry.value}
                         type="button"
                         className={clsx('pill', { active: highlightOpacity === entry.value })}
-                        onClick={() => setHighlightOpacity(entry.value)}
-                        aria-pressed={highlightOpacity === entry.value}
+                          onClick={() => setHighlightOpacity(entry.value)}
                       >
                         {entry.label}
                       </button>
@@ -1141,7 +1183,7 @@ const App = () => {
                     type="button"
                     className={clsx('toggle-pill', { active: textDefaults.background })}
                     onClick={() => handleTextStyleChange({ background: !textDefaults.background })}
-                    aria-pressed={textDefaults.background}
+                    aria-pressed={textDefaults.background ? 'true' : 'false'}
                   >
                     {textDefaults.background ? 'Visible' : 'Hidden'}
                   </button>
@@ -1173,6 +1215,7 @@ const App = () => {
                       onChange={(event) =>
                         handleTextStyleChange({ fontSize: Number(event.target.value) })
                       }
+                      aria-label="Font size"
                     />
                     <span>px</span>
                   </div>
@@ -1184,7 +1227,6 @@ const App = () => {
                       type="button"
                       className={clsx('style-button', { active: textDefaults.bold })}
                       onClick={() => handleTextStyleChange({ bold: !textDefaults.bold })}
-                      aria-pressed={textDefaults.bold}
                       title="Bold"
                     >
                       B
@@ -1193,7 +1235,6 @@ const App = () => {
                       type="button"
                       className={clsx('style-button', { active: textDefaults.italic })}
                       onClick={() => handleTextStyleChange({ italic: !textDefaults.italic })}
-                      aria-pressed={textDefaults.italic}
                       title="Italic"
                     >
                       I
@@ -1202,7 +1243,6 @@ const App = () => {
                       type="button"
                       className={clsx('style-button', { active: textDefaults.underline })}
                       onClick={() => handleTextStyleChange({ underline: !textDefaults.underline })}
-                      aria-pressed={textDefaults.underline}
                       title="Underline"
                     >
                       U
@@ -1218,7 +1258,6 @@ const App = () => {
                         type="button"
                         className={clsx('style-button', { active: textDefaults.align === align })}
                         onClick={() => handleTextStyleChange({ align })}
-                        aria-pressed={textDefaults.align === align}
                         title={`Align ${align}`}
                       >
                         {align === 'left' ? 'L' : align === 'center' ? 'C' : 'R'}
@@ -1231,6 +1270,22 @@ const App = () => {
           </section>
         </div>
       </header>
+
+      {importingPdf ? (
+        <div className="pdf-import-overlay" role="status" aria-live="polite">
+          <div className="pdf-import-panel">
+            <div className="pdf-import-title">Importing PDF</div>
+            <div className="pdf-import-meta">{importProgress.current} / {importProgress.total} pages</div>
+            <div className="progress">
+              <div
+                className="progress__bar"
+                style={{ width: `${importProgress.total ? Math.round((importProgress.current / importProgress.total) * 100) : 0}%` }}
+              />
+            </div>
+            <div className="pdf-import-worker">{workerStatus === 'available' ? 'Using worker' : workerStatus === 'disabled' ? 'Main-thread rendering' : workerStatus === 'failed' ? 'Worker failed' : 'Worker: unknown'}</div>
+          </div>
+        </div>
+      ) : null}
 
       <main className="workspace">
         <Canvas
@@ -1315,7 +1370,7 @@ const ToolToggle = ({ options, value, onChange }: ToolToggleProps) => {
     <div
       className="tool-toggle"
       style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
-      role="tablist"
+      role="toolbar"
       aria-label="Drawing tools"
     >
       <div className="tool-toggle__rail" aria-hidden />
@@ -1333,8 +1388,6 @@ const ToolToggle = ({ options, value, onChange }: ToolToggleProps) => {
           type="button"
           className={clsx('tool-toggle__button', { active: option.id === value })}
           onClick={() => onChange(option.id)}
-          aria-pressed={option.id === value}
-          role="tab"
           title={option.hint}
         >
           <span>{option.label}</span>
