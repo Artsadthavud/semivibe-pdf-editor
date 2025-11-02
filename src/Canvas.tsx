@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
-import type { Page, Stroke, TextItem, ToolType } from './types';
+import type { Page, Shape, ShapeType, Stroke, TextItem, ToolType } from './types';
 
 type CanvasProps = {
   page: Page;
@@ -10,8 +10,12 @@ type CanvasProps = {
   highlighterColor: string;
   highlighterWidth: number;
   highlightOpacity: number;
+  shapeType: ShapeType;
+  shapeColor: string;
+  shapeWidth: number;
   selectedTextId: string | null;
   onStrokeEnd: (stroke: Stroke) => void;
+  onShapeComplete: (shape: Shape) => void;
   onTextChange: (id: string, changes: Partial<TextItem>) => void;
   onTextCreate: (x: number, y: number) => void;
   onTextDelete: (id: string) => void;
@@ -47,8 +51,12 @@ const Canvas = ({
   highlighterColor,
   highlighterWidth,
   highlightOpacity,
+  shapeType,
+  shapeColor,
+  shapeWidth,
   selectedTextId,
   onStrokeEnd,
+  onShapeComplete,
   onTextChange,
   onTextCreate,
   onTextDelete,
@@ -58,6 +66,7 @@ const Canvas = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const strokeDraft = useRef<Stroke | null>(null);
+  const shapeDraft = useRef<Shape | null>(null);
   const dragState = useRef<DragState | null>(null);
 
   const drawStroke = useCallback(
@@ -81,25 +90,92 @@ const Canvas = ({
     [highlightOpacity]
   );
 
+  const drawShape = useCallback((ctx: CanvasRenderingContext2D, shape: Shape) => {
+    const { start, end, stroke, strokeWidth, type } = shape;
+    ctx.save();
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = strokeWidth;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    switch (type) {
+      case 'line': {
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(end.x, end.y);
+        ctx.stroke();
+        break;
+      }
+      case 'arrow': {
+        const angle = Math.atan2(end.y - start.y, end.x - start.x);
+        const headLength = 12 + strokeWidth * 1.5;
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(end.x, end.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(end.x, end.y);
+        ctx.lineTo(
+          end.x - headLength * Math.cos(angle - Math.PI / 6),
+          end.y - headLength * Math.sin(angle - Math.PI / 6)
+        );
+        ctx.moveTo(end.x, end.y);
+        ctx.lineTo(
+          end.x - headLength * Math.cos(angle + Math.PI / 6),
+          end.y - headLength * Math.sin(angle + Math.PI / 6)
+        );
+        ctx.stroke();
+        break;
+      }
+      case 'rectangle': {
+        const x = Math.min(start.x, end.x);
+        const y = Math.min(start.y, end.y);
+        const width = Math.abs(end.x - start.x);
+        const height = Math.abs(end.y - start.y);
+        ctx.strokeRect(x, y, width, height);
+        break;
+      }
+      case 'ellipse': {
+        const radiusX = Math.abs(end.x - start.x) / 2;
+        const radiusY = Math.abs(end.y - start.y) / 2;
+        const centerX = (start.x + end.x) / 2;
+        const centerY = (start.y + end.y) / 2;
+        ctx.beginPath();
+        ctx.ellipse(centerX, centerY, Math.max(radiusX, 1), Math.max(radiusY, 1), 0, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+      }
+      default:
+        break;
+    }
+    ctx.restore();
+  }, []);
+
   const redraw = useCallback(
-    (preview?: Stroke | null) => {
+    (preview?: { stroke?: Stroke | null; shape?: Shape | null }) => {
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d');
       if (!canvas || !ctx) return;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.scale(deviceRatio, deviceRatio);
+
       page.strokes.forEach((stroke) => drawStroke(ctx, stroke));
-      if (preview) {
-        drawStroke(ctx, preview);
+      page.shapes.forEach((shape) => drawShape(ctx, shape));
+
+      if (preview?.stroke) {
+        drawStroke(ctx, preview.stroke);
+      }
+      if (preview?.shape) {
+        drawShape(ctx, preview.shape);
       }
     },
-    [drawStroke, page.strokes]
+    [drawShape, drawStroke, page.shapes, page.strokes]
   );
 
   useEffect(() => {
     redraw();
-  }, [page.strokes, redraw]);
+  }, [page.shapes, page.strokes, redraw]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -131,10 +207,25 @@ const Canvas = ({
     redraw();
   }, [onStrokeEnd, redraw]);
 
+  const finishShape = useCallback(() => {
+    if (shapeDraft.current) {
+      const { start, end } = shapeDraft.current;
+      if (start.x !== end.x || start.y !== end.y) {
+        onShapeComplete(shapeDraft.current);
+      }
+    }
+    shapeDraft.current = null;
+    redraw();
+  }, [onShapeComplete, redraw]);
+
   useEffect(() => {
-    window.addEventListener('pointerup', finishStroke);
-    return () => window.removeEventListener('pointerup', finishStroke);
-  }, [finishStroke]);
+    const handleUp = () => {
+      finishStroke();
+      finishShape();
+    };
+    window.addEventListener('pointerup', handleUp);
+    return () => window.removeEventListener('pointerup', handleUp);
+  }, [finishShape, finishStroke]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -152,6 +243,19 @@ const Canvas = ({
       return;
     }
 
+    if (tool === 'shape') {
+      shapeDraft.current = {
+        id: createId(),
+        type: shapeType,
+        stroke: shapeColor,
+        strokeWidth: shapeWidth,
+        start: { x, y },
+        end: { x, y }
+      };
+      redraw({ shape: shapeDraft.current });
+      return;
+    }
+
     const strokeColor = tool === 'highlighter' ? highlighterColor : penColor;
     const strokeWidth = tool === 'highlighter' ? highlighterWidth : penWidth;
     const newStroke: Stroke = {
@@ -163,19 +267,29 @@ const Canvas = ({
       opacity: tool === 'highlighter' ? highlightOpacity : undefined
     };
     strokeDraft.current = newStroke;
-    redraw(newStroke);
+    redraw({ stroke: newStroke });
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!strokeDraft.current) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
+
+    if (shapeDraft.current) {
+      shapeDraft.current = {
+        ...shapeDraft.current,
+        end: { x: event.clientX - rect.left, y: event.clientY - rect.top }
+      };
+      redraw({ shape: shapeDraft.current });
+      return;
+    }
+
+    if (!strokeDraft.current) return;
     strokeDraft.current.points.push({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top
     });
-    redraw(strokeDraft.current);
+    redraw({ stroke: strokeDraft.current });
   };
 
   const handleCanvasClick = () => {
@@ -349,12 +463,7 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
       />
       {selected ? (
         <div className="text-box__toolbar">
-          <button
-            type="button"
-            className="text-box__toolbar-btn"
-            onClick={onDelete}
-            aria-label="Remove text"
-          >
+          <button type="button" className="text-box__toolbar-btn" onClick={onDelete} aria-label="Remove text">
             🗑
           </button>
           <div

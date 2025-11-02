@@ -1,4 +1,4 @@
-export type ToolType = 'pointer' | 'pen' | 'highlighter' | 'text';
+export type ToolType = 'pointer' | 'pen' | 'highlighter' | 'text' | 'shape';
 
 export type Point = {
   x: number;
@@ -12,6 +12,17 @@ export type Stroke = {
   thickness: number;
   points: Point[];
   opacity?: number;
+};
+
+export type ShapeType = 'line' | 'rectangle' | 'ellipse' | 'arrow';
+
+export type Shape = {
+  id: string;
+  type: ShapeType;
+  stroke: string;
+  strokeWidth: number;
+  start: Point;
+  end: Point;
 };
 
 export type TextItem = {
@@ -35,5 +46,6 @@ export type Page = {
   id: string;
   name: string;
   strokes: Stroke[];
+  shapes: Shape[];
   texts: TextItem[];
 };

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import Canvas from './Canvas';
-import type { Page, Stroke, TextItem, ToolType } from './types';
+import type { Page, Shape, ShapeType, Stroke, TextItem, ToolType } from './types';
 
 type TextDefaults = {
   color: string;
@@ -25,6 +25,12 @@ const HIGHLIGHT_OPACITIES = [
 ];
 const TEXT_COLORS = ['#0f172a', '#1d4ed8', '#dc2626', '#16a34a', '#0ea5e9', '#f97316'];
 const TEXT_BG_COLORS = ['#ffffff', '#fef3c7', '#fee2e2', '#dbeafe', '#dcfce7', '#f8fafc'];
+const SHAPE_TYPES: Array<{ id: ShapeType; label: string }> = [
+  { id: 'line', label: 'Line' },
+  { id: 'rectangle', label: 'Rectangle' },
+  { id: 'ellipse', label: 'Circle' },
+  { id: 'arrow', label: 'Arrow' }
+];
 
 const defaultText: TextDefaults = {
   color: '#0f172a',
@@ -48,6 +54,7 @@ const createPage = (index: number): Page => ({
   id: createId(),
   name: `Page ${index + 1}`,
   strokes: [],
+  shapes: [],
   texts: []
 });
 
@@ -72,6 +79,7 @@ const TOOL_META: Array<{ id: ToolType; label: string; hint: string }> = [
   { id: 'pointer', label: 'Pointer', hint: 'Pointer tool (Esc)' },
   { id: 'pen', label: 'Pen', hint: 'Pen tool (P)' },
   { id: 'highlighter', label: 'Highlight', hint: 'Highlighter (H)' },
+  { id: 'shape', label: 'Shapes', hint: 'Shapes (S)' },
   { id: 'text', label: 'Text', hint: 'Text tool (T)' }
 ];
 
@@ -85,6 +93,9 @@ const App = () => {
   const [highlightColor, setHighlightColor] = useState('#fde047');
   const [highlightWidth, setHighlightWidth] = useState(18);
   const [highlightOpacity, setHighlightOpacity] = useState(0.55);
+  const [shapeType, setShapeType] = useState<ShapeType>('rectangle');
+  const [shapeColor, setShapeColor] = useState('#1d4ed8');
+  const [shapeWidth, setShapeWidth] = useState(3);
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
   const [textDefaults, setTextDefaults] = useState<TextDefaults>(defaultText);
 
@@ -98,6 +109,13 @@ const App = () => {
     updateActivePage((page) => ({
       ...page,
       strokes: [...page.strokes, stroke]
+    }));
+  };
+
+  const handleShapeComplete = (shape: Shape) => {
+    updateActivePage((page) => ({
+      ...page,
+      shapes: [...page.shapes, shape]
     }));
   };
 
@@ -213,6 +231,7 @@ const App = () => {
     updateActivePage((page) => ({
       ...page,
       strokes: [],
+      shapes: [],
       texts: []
     }));
     setSelectedTextId(null);
@@ -337,6 +356,57 @@ const App = () => {
                     </button>
                   ))}
                 </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="control-card">
+            <div className="card-header">
+              <span className="card-label">Shapes</span>
+              <span className="card-value">{SHAPE_TYPES.find((shape) => shape.id === shapeType)?.label}</span>
+            </div>
+            <div className="card-body card-body--stacked">
+              <div className="setting-group">
+                <span className="setting-label">Type</span>
+                <div className="shape-buttons">
+                  {SHAPE_TYPES.map((shape) => (
+                    <button
+                      key={shape.id}
+                      type="button"
+                      className={clsx('shape-button', { active: shapeType === shape.id })}
+                      onClick={() => setShapeType(shape.id)}
+                    >
+                      {shape.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="setting-group">
+                <span className="setting-label">Colour</span>
+                <div className="swatches">
+                  {PEN_COLORS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      className={clsx('swatch', { active: shapeColor === color })}
+                      style={{ backgroundColor: color }}
+                      onClick={() => setShapeColor(color)}
+                      aria-label={`Shape colour ${color}`}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="setting-group">
+                <span className="setting-label">Stroke</span>
+                <input
+                  className="density-slider"
+                  type="range"
+                  min={1}
+                  max={20}
+                  value={shapeWidth}
+                  onChange={(event) => setShapeWidth(Number(event.target.value))}
+                  aria-label="Shape stroke width"
+                />
               </div>
             </div>
           </section>
@@ -469,8 +539,12 @@ const App = () => {
           highlighterColor={highlightColor}
           highlighterWidth={highlightWidth}
           highlightOpacity={highlightOpacity}
+          shapeType={shapeType}
+          shapeColor={shapeColor}
+          shapeWidth={shapeWidth}
           selectedTextId={selectedTextId}
           onStrokeEnd={handleStrokeEnd}
+          onShapeComplete={handleShapeComplete}
           onTextChange={handleTextChange}
           onTextCreate={handleTextCreate}
           onTextDelete={handleTextDelete}
