@@ -307,6 +307,29 @@ const App = () => {
     if (id) setTool('attach');
   };
 
+  const handleAssetDragStart = (e: React.DragEvent, asset: { id: string; name: string; url: string }) => {
+    try {
+      // Prefer providing a URI so drops create an attachment (not a text box with the name)
+      if (e.dataTransfer) {
+        e.dataTransfer.setData('text/uri-list', asset.url);
+        // Some consumers read text/plain; provide the URL there as well (not the filename)
+        e.dataTransfer.setData('text/plain', asset.url);
+        // Try to provide a drag image for nicer UX
+        const img = new Image();
+        img.src = asset.url;
+        img.onload = () => {
+          try {
+            e.dataTransfer?.setDragImage(img, Math.min(32, img.width / 2), Math.min(32, img.height / 2));
+          } catch (err) {
+            // ignore setDragImage failures
+          }
+        };
+      }
+    } catch (err) {
+      // defensive: ignore edge cases where dataTransfer is restricted
+    }
+  };
+
   // Attach handlers
   const handleAttachCreate = (x: number, y: number, src: string, name?: string) => {
     const id = createId();
@@ -622,17 +645,25 @@ const App = () => {
                     + Add images
                   </label>
                   {/* folder selection removed: project-assets and uploads are supported via the other controls */}
-                  <div>
+                  <div className="attach-list">
                     {uploadedAssets.map((asset) => (
-                      <button
+                      <div
                         key={asset.id}
-                        type="button"
-                        className={clsx('attach-thumb', { selected: selectedAssetId === asset.id })}
+                        role="button"
+                        tabIndex={0}
+                        draggable
+                        onDragStart={(e) => handleAssetDragStart(e, asset)}
+                        className={clsx('attach-item', { selected: selectedAssetId === asset.id })}
                         onClick={() => handleSelectAsset(asset.id)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleSelectAsset(asset.id); }}
                         title={`Place ${asset.name}`}
                       >
-                        <img src={asset.url} alt={asset.name} />
-                      </button>
+                        <div className={clsx('attach-thumb-small', { selected: selectedAssetId === asset.id })}>
+                          <img src={asset.url} alt={asset.name} />
+                        </div>
+                        <div className="attach-name">{asset.name}</div>
+                        <div className="attach-preview"><img src={asset.url} alt={asset.name} /></div>
+                      </div>
                     ))}
                   </div>
                 </div>

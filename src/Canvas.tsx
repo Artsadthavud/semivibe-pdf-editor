@@ -265,15 +265,24 @@ const Canvas = ({
       return;
     }
 
-    // if plain text was dropped (and no image file), create a text box with content
+    // If a dragged asset provided a URI (for example via dragstart on an asset list), prefer that
     try {
-      const text = e.dataTransfer?.getData && e.dataTransfer.getData('text/plain');
-      if (text) {
-        onTextCreate?.(x, y, text);
-        return;
+      const uri = e.dataTransfer?.getData && (e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain'));
+      if (uri) {
+        // if the data looks like an image URL (blob:, http(s) or ends with an image extension), create attachment
+        const looksLikeImage = /^blob:|^https?:|\.(png|jpe?g|gif|webp|svg)$/i.test(uri);
+        if (looksLikeImage) {
+          onAttachCreate?.(x, y, uri);
+          return;
+        }
+        // otherwise, fall back to creating text if it's arbitrary text
+        if (uri.trim()) {
+          onTextCreate?.(x, y, uri);
+          return;
+        }
       }
     } catch (err) {
-      // some browsers may restrict type access
+      // some browsers may restrict type access; ignore and let text fallback below
     }
   };
 
