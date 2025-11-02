@@ -607,7 +607,7 @@ const Canvas = ({
       }
       <div className="text-layer" style={{ width: size.width, height: size.height }}>
         {page.texts.map((text) => (
-          <TextBox
+            <TextBox
             key={text.id}
             item={text}
             selected={text.id === selectedTextId}
@@ -729,9 +729,31 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
         }
       }}
     >
+      {/* left grip for moving when selected - like the screenshot */}
+      {selected ? (
+        <div
+          className="text-box__grip"
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            onSelect();
+            try {
+              // blur any focused element (remove caret) so dragging works after editing
+              if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+            } catch (e) {
+              // ignore
+            }
+            event.preventDefault();
+            onDrag(event);
+          }}
+          title="Drag"
+        >
+          <span className="grip-dots">⋮</span>
+        </div>
+      ) : null}
       <div
         ref={ref}
-        className="text-box__content"
+        className={clsx('text-box__content', { 'single-line': item.singleLine })}
+        data-placeholder="Start typing here..."
         contentEditable={tool === 'text'}
         suppressContentEditableWarning
         spellCheck={tool === 'text'}
@@ -745,7 +767,14 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
         }}
         onInput={(event) => {
           if (tool === 'text') {
-            onChange({ text: event.currentTarget.textContent ?? '' });
+            const newText = event.currentTarget.textContent ?? '';
+            onChange({ text: newText });
+            // if in single-line mode, expand width as user types to fit content
+            if (item.singleLine) {
+              const node = ref.current;
+              const measured = node ? node.scrollWidth : item.width;
+              onChange({ width: Math.max(120, Math.ceil(measured + 12)) });
+            }
           }
         }}
         onFocus={() => {
@@ -754,6 +783,17 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
           }
         }}
       />
+      {/* right-side circular resize handle (visible when selected) */}
+      {selected ? (
+        <div
+          className="text-box__handle"
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            onResize(event as React.PointerEvent<HTMLDivElement>);
+          }}
+          title="Resize"
+        />
+      ) : null}
       {selected ? (
         <div className="text-box__toolbar">
           <button type="button" className="text-box__toolbar-btn" onClick={onDelete} aria-label="Remove text">
@@ -775,6 +815,25 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
           >
             <span className="chip-indicator" aria-hidden />
             <span>Bg</span>
+          </button>
+          <button
+            type="button"
+            className={clsx('text-box__toolbar-chip', { active: item.singleLine })}
+            onClick={() => {
+              // toggle singleLine; when enabling, measure content and expand width to fit
+              const willSingle = !item.singleLine;
+              if (willSingle) {
+                const node = ref.current;
+                const measured = node ? node.scrollWidth : item.width;
+                onChange({ singleLine: true, width: Math.max(120, Math.ceil(measured + 12)) });
+              } else {
+                onChange({ singleLine: false });
+              }
+            }}
+            aria-pressed={!!item.singleLine}
+            aria-label={item.singleLine ? 'Disable single-line' : 'Enable single-line'}
+          >
+            1-line
           </button>
         </div>
       ) : null}

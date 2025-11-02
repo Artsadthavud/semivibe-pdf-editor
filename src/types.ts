@@ -40,6 +40,7 @@ export type TextItem = {
   align: CanvasTextAlign;
   background: boolean;
   backgroundColor: string;
+  singleLine?: boolean;
 };
 
 export type AttachItem = {

@@ -30,13 +30,16 @@ input {
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.85rem 1.5rem 1rem;
-  background: rgba(255, 255, 255, 0.94);
-  border-bottom: 1px solid #dbeafe;
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.96);
+  border-bottom: 1px solid rgba(219, 234, 254, 0.6);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
   backdrop-filter: blur(12px);
-  position: sticky;
-  top: 0;
-  z-index: 20;
+  position: fixed; /* float above content */
+  left: 1.25rem;
+  right: 1.25rem;
+  top: 12px;
+  border-radius: 12px;
+  z-index: 60;
 }
 
 .toolbar-row {
@@ -355,8 +358,10 @@ input {
 }
 
 .text-box.selected {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+  border-color: rgba(37, 99, 235, 0.6);
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.06);
+  border-style: dashed;
+  background: rgba(255,255,255,0.98);
 }
 
 .text-box__content {
@@ -364,6 +369,78 @@ input {
   outline: none;
   white-space: pre-wrap;
   cursor: text;
+}
+
+.text-box__content.single-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* placeholder for contentEditable element */
+.text-box__content:empty::before {
+  content: attr(data-placeholder);
+  color: #9ca3af;
+  pointer-events: none;
+}
+
+/* left drag grip inside selected text box */
+.text-box__grip {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  bottom: 8px;
+  width: 44px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #1d4ed8, #2563eb);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 700;
+  cursor: grab;
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.12);
+}
+
+.text-box.selected .text-box__content {
+  margin-left: 52px;
+}
+
+.grip-dots {
+  font-size: 18px;
+  line-height: 1;
+  transform: rotate(90deg);
+}
+
+/* tweak resize handle to look like a circular handle */
+.text-box__resize {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid #93c5fd;
+  cursor: ew-resize;
+  box-shadow: 0 6px 12px rgba(15,23,42,0.08);
+}
+
+/* right-side circular handle for resizing the text box */
+.text-box__handle {
+  position: absolute;
+  right: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid #93c5fd;
+  box-shadow: 0 6px 12px rgba(15,23,42,0.08);
+  cursor: ew-resize;
+}
+
+.text-box__handle:active,
+.text-box__resize:active {
+  transform: translateY(-50%) scale(0.98);
 }
 
 .text-box__toolbar {
@@ -548,6 +625,7 @@ input {
 
 /* prevent accidental text selection when dragging the asset name */
 .attach-item, .attach-item * {
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -648,6 +726,7 @@ input {
   .workspace {
     flex-direction: column;
     padding: 1rem;
+    margin-top: 86px; /* account for fixed toolbar height on small screens */
   }
 }
 .opacity-pills {

@@ -74,6 +74,8 @@ const createText = (x: number, y: number, defaults: TextDefaults): TextItem => (
   align: defaults.align,
   background: defaults.background,
   backgroundColor: defaults.backgroundColor
+  ,
+  singleLine: false
 });
 
 const TOOL_META: Array<{ id: ToolType; label: string; hint: string }> = [
