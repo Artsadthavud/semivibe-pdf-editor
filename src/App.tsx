@@ -200,7 +200,7 @@ const App = () => {
           (pageModel.attachments ?? []).every((a) => a.pdfBackgroundGroup === pageModel.pdfImportGroup)
         );
 
-        if (isPureImportedPage && imp) {
+        if (imp && imp.data) {
           // load source PDF once per import
           let srcPdf: any = importDocCache.get(imp.id);
           if (!srcPdf) {
@@ -211,7 +211,197 @@ const App = () => {
           if (srcPageIndex >= 0) {
             const [copied] = await pdfDoc.copyPages(srcPdf, [srcPageIndex]);
             // add copied page to target doc (preserves vector content)
-            pdfDoc.addPage(copied);
+            const added = pdfDoc.addPage(copied as any);
+
+            // Determine if this page has any user annotations (strokes/shapes/texts or non-background attachments)
+            const hasAnnotations = (
+              (pageModel.strokes?.length ?? 0) > 0 ||
+              (pageModel.shapes?.length ?? 0) > 0 ||
+              (pageModel.texts?.length ?? 0) > 0 ||
+              (pageModel.attachments ?? []).some((a) => a.pdfBackgroundGroup !== pageModel.pdfImportGroup)
+            );
+
+            if (!hasAnnotations) {
+              // nothing to overlay; the copied page is sufficient (vector preserved)
+              continue;
+            }
+
+            // If there are annotations, render only the annotations to a high-res PNG and overlay
+            const offOverlay = document.createElement('canvas');
+            offOverlay.width = targetW;
+            offOverlay.height = targetH;
+            const ctxO = offOverlay.getContext('2d');
+            if (!ctxO) throw new Error('Unable to create overlay canvas');
+            ctxO.clearRect(0, 0, offOverlay.width, offOverlay.height);
+
+            // compute scale from app CSS width to overlay pixels
+            const containerEl = document.querySelector('.canvas-area') as HTMLElement | null;
+            const appWidth = containerEl ? containerEl.getBoundingClientRect().width : 210;
+            const scaleXov = targetW / appWidth;
+            const scaleYov = targetH / (containerEl ? containerEl.getBoundingClientRect().height : 297);
+
+            // draw non-background attachments (user-added images)
+            for (const attach of (pageModel.attachments ?? []).filter((a) => a.pdfBackgroundGroup !== pageModel.pdfImportGroup)) {
+              try {
+                const img = await loadImage(attach.src);
+                ctxO.drawImage(
+                  img,
+                  attach.x * scaleXov,
+                  attach.y * scaleYov,
+                  attach.width * scaleXov,
+                  attach.height * scaleYov
+                );
+              } catch (e) {}
+            }
+
+            // draw shapes
+            const drawShapeOverlay = (shape: Shape) => {
+              ctxO.save();
+              ctxO.strokeStyle = shape.stroke;
+              ctxO.lineWidth = (shape.strokeWidth || 1) * Math.max(scaleXov, scaleYov);
+              ctxO.lineJoin = 'round';
+              ctxO.lineCap = 'round';
+              const sx = shape.start.x * scaleXov;
+              const sy = shape.start.y * scaleYov;
+              const ex = shape.end.x * scaleXov;
+              const ey = shape.end.y * scaleYov;
+              switch (shape.type) {
+                case 'line':
+                  ctxO.beginPath();
+                  ctxO.moveTo(sx, sy);
+                  ctxO.lineTo(ex, ey);
+                  ctxO.stroke();
+                  break;
+                case 'arrow': {
+                  const angle = Math.atan2(ey - sy, ex - sx);
+                  const headLength = 12 + (shape.strokeWidth || 1) * 1.5;
+                  ctxO.beginPath();
+                  ctxO.moveTo(sx, sy);
+                  ctxO.lineTo(ex, ey);
+                  ctxO.stroke();
+                  ctxO.beginPath();
+                  ctxO.moveTo(ex, ey);
+                  ctxO.lineTo(
+                    ex - headLength * Math.cos(angle - Math.PI / 6),
+                    ey - headLength * Math.sin(angle - Math.PI / 6)
+                  );
+                  ctxO.moveTo(ex, ey);
+                  ctxO.lineTo(
+                    ex - headLength * Math.cos(angle + Math.PI / 6),
+                    ey - headLength * Math.sin(angle + Math.PI / 6)
+                  );
+                  ctxO.stroke();
+                  break;
+                }
+                case 'rectangle': {
+                  const left = Math.min(sx, ex);
+                  const top = Math.min(sy, ey);
+                  const width = Math.abs(ex - sx);
+                  const height = Math.abs(ey - sy);
+                  ctxO.strokeRect(left, top, width, height);
+                  break;
+                }
+                case 'ellipse': {
+                  const rx = Math.max(Math.abs(ex - sx) / 2, 1);
+                  const ry = Math.max(Math.abs(ey - sy) / 2, 1);
+                  const cx = (sx + ex) / 2;
+                  const cy = (sy + ey) / 2;
+                  ctxO.beginPath();
+                  ctxO.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+                  ctxO.stroke();
+                  break;
+                }
+                default:
+                  break;
+              }
+              ctxO.restore();
+            };
+            for (const shape of pageModel.shapes) drawShapeOverlay(shape);
+
+            // draw strokes
+            for (const stroke of pageModel.strokes) {
+              if (!stroke.points || stroke.points.length < 2) continue;
+              ctxO.save();
+              ctxO.lineJoin = 'round';
+              ctxO.lineCap = 'round';
+              ctxO.lineWidth = (stroke.thickness || 1) * Math.max(scaleXov, scaleYov);
+              ctxO.strokeStyle = stroke.color;
+              ctxO.globalAlpha = stroke.tool === 'highlighter' ? stroke.opacity ?? 0.55 : 1;
+              ctxO.beginPath();
+              ctxO.moveTo(stroke.points[0].x * scaleXov, stroke.points[0].y * scaleYov);
+              for (let i = 1; i < stroke.points.length; i++) {
+                ctxO.lineTo(stroke.points[i].x * scaleXov, stroke.points[i].y * scaleYov);
+              }
+              ctxO.stroke();
+              ctxO.restore();
+            }
+
+            // draw texts
+            for (const text of pageModel.texts) {
+              const fontSize = text.fontSize * Math.max(scaleXov, scaleYov);
+              ctxO.font = `${text.bold ? '700' : '400'} ${fontSize}px ${text.fontFamily}`;
+              ctxO.fillStyle = text.color || '#000';
+              const lineHeight = fontSize * 1.2;
+              const maxWidth = text.width * scaleXov;
+              const x = text.x * scaleXov;
+              let y = text.y * scaleYov + fontSize;
+              if (text.background) {
+                const lines: string[] = [];
+                if (text.singleLine) lines.push(text.text);
+                else {
+                  const words = (text.text || '').split(/\s+/);
+                  let line = '';
+                  for (const w of words) {
+                    const test = line ? line + ' ' + w : w;
+                    const m = ctxO.measureText(test).width;
+                    if (m > maxWidth && line) {
+                      lines.push(line);
+                      line = w;
+                    } else {
+                      line = test;
+                    }
+                  }
+                  if (line) lines.push(line);
+                }
+                const bgH = lines.length * lineHeight + 8;
+                ctxO.fillStyle = text.backgroundColor || '#fff';
+                ctxO.fillRect(x - 4, text.y * scaleYov - 4, maxWidth + 8, bgH);
+                ctxO.fillStyle = text.color || '#000';
+                for (const l of lines) {
+                  ctxO.fillText(l, x, y);
+                  y += lineHeight;
+                }
+              } else {
+                if (text.singleLine) {
+                  ctxO.fillText(text.text || '', x, y);
+                } else {
+                  const words = (text.text || '').split(/\s+/);
+                  let line = '';
+                  for (const w of words) {
+                    const test = line ? line + ' ' + w : w;
+                    const m = ctxO.measureText(test).width;
+                    if (m > maxWidth && line) {
+                      ctxO.fillText(line, x, y);
+                      line = w;
+                      y += lineHeight;
+                    } else {
+                      line = test;
+                    }
+                  }
+                  if (line) ctxO.fillText(line, x, y);
+                }
+              }
+            }
+
+            const overlayBlob: Blob | null = await new Promise((resolve) => offOverlay.toBlob((b) => resolve(b), 'image/png'));
+            if (overlayBlob) {
+              const overlayArray = await overlayBlob.arrayBuffer();
+              const overlayImg = await pdfDoc.embedPng(overlayArray);
+              const ptPerInch = 72;
+              const a4pt = { w: Math.round(mmToInch(a4mm.w) * ptPerInch), h: Math.round(mmToInch(a4mm.h) * ptPerInch) };
+              added.drawImage(overlayImg, { x: 0, y: 0, width: a4pt.w, height: a4pt.h });
+            }
+
             continue;
           }
         }
@@ -549,11 +739,27 @@ const App = () => {
   };
 
   // create text, optionally with initial content (used for drop)
-  const handleTextCreate = (x: number, y: number, initialText?: string) => {
-    const safeX = Math.max(24, x - textDefaults.width / 2);
-    const safeY = Math.max(24, y);
+  const handleTextCreate = (x: number, y: number, initialText?: string, clientX?: number, clientY?: number) => {
+    // Compute padding from rem units defined in CSS so the click aligns with the
+    // contentEditable text area (the .text-box has padding: 0.6rem 0.9rem).
+    let padLeft = 14; // default px fallback (~0.9rem @16px)
+    let padTop = 10; // default px fallback (~0.6rem @16px)
+    try {
+      const rootFont = parseFloat(getComputedStyle(document.documentElement).fontSize || '16');
+      padLeft = rootFont * 0.9;
+      padTop = rootFont * 0.6;
+    } catch (e) {
+      // ignore and use defaults
+    }
+
+    // Position the box so that the inner content's left edge (after padding) is at the click X.
+    // Also adjust Y so the click hits near the first text line (account for padding and a small baseline shift).
+    const safeX = Math.max(8, Math.round(x - padLeft));
+    const safeY = Math.max(8, Math.round(y - padTop - (textDefaults.fontSize * 0.3)));
     const text = createText(safeX, safeY, textDefaults);
     if (initialText) text.text = initialText;
+    if (typeof clientX === 'number') (text as any).initialClientX = clientX;
+    if (typeof clientY === 'number') (text as any).initialClientY = clientY;
     updateActivePage((page) => ({
       ...page,
       texts: [...page.texts, text]
@@ -561,6 +767,8 @@ const App = () => {
     setSelectedTextId(text.id);
     setTool('text');
   };
+
+  // NOTE: removed auto-create/nudge behavior so text placement is manual (user clicks to place).
 
   const handleTextDelete = (id: string) => {
     updateActivePage((page) => ({

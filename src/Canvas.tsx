@@ -19,7 +19,8 @@ type CanvasProps = {
   onStrokeEnd: (stroke: Stroke) => void;
   onShapeComplete: (shape: Shape) => void;
   onTextChange: (id: string, changes: Partial<TextItem>) => void;
-  onTextCreate: (x: number, y: number, initialText?: string) => void;
+  // onTextCreate may receive optional client coords so the created TextBox can set the caret at the click
+  onTextCreate: (x: number, y: number, initialText?: string, clientX?: number, clientY?: number) => void;
   onTextDelete: (id: string) => void;
   onTextSelect: (id: string | null) => void;
   onAttachCreate?: (x: number, y: number, src: string, name?: string) => void;
@@ -466,7 +467,7 @@ const Canvas = ({
     }
 
     if (tool === 'text') {
-      onTextCreate(x, y);
+      onTextCreate(x, y, undefined, event.clientX, event.clientY);
       return;
     }
 
@@ -700,9 +701,173 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
     }
   }, [item.text]);
 
+  // When a text box is selected and the tool is text, focus it and position the caret.
+  // Use the click client coordinates if available and fall back to a measured position.
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    if (selected && tool === 'text') {
+      try {
+        node.focus();
+        const cx = (item as any).initialClientX;
+        const cy = (item as any).initialClientY;
+
+        // If we have client coords, first try the browser's point-based caret APIs which are
+        // the most accurate for positioning a caret at a click location inside a contentEditable.
+        if (typeof cx === 'number' && typeof cy === 'number') {
+          try {
+            // @ts-ignore - vendor APIs
+            const doc: any = document;
+            let range: Range | null = null;
+            if (typeof doc.caretRangeFromPoint === 'function') {
+              // Chromium / WebKit
+              // @ts-ignore
+              range = doc.caretRangeFromPoint(cx, cy);
+            } else if (typeof doc.caretPositionFromPoint === 'function') {
+              // Firefox
+              // @ts-ignore
+              const pos = doc.caretPositionFromPoint(cx, cy);
+              if (pos) {
+                range = document.createRange();
+                range.setStart(pos.offsetNode, pos.offset);
+                range.collapse(true);
+              }
+            }
+
+            if (range) {
+              // Ensure range is inside our editable node; if not, try to translate to a child text node
+              let startNode = range.startContainer as Node | null;
+              if (startNode && startNode.nodeType === Node.ELEMENT_NODE && startNode !== node) {
+                // try to descend into the element under point
+                const findTextNodeAt = (el: Element): Text | null => {
+                  for (const ch of Array.from(el.childNodes)) {
+                    if (ch.nodeType === Node.TEXT_NODE) return ch as Text;
+                    if (ch.nodeType === Node.ELEMENT_NODE) {
+                      const res = findTextNodeAt(ch as Element);
+                      if (res) return res;
+                    }
+                  }
+                  return null;
+                };
+                const textNode = findTextNodeAt(startNode as Element) || findTextNodeAt(node as Element);
+                if (textNode) {
+                  // compute localX relative to the node to estimate character offset
+                  const rect = node.getBoundingClientRect();
+                  const cs = window.getComputedStyle(node);
+                  const paddingLeft = parseFloat(cs.paddingLeft || '0');
+                  const localX = cx - rect.left - paddingLeft;
+
+                  // measure per-character to find nearest offset (works for proportional fonts)
+                  const canvas = document.createElement('canvas');
+                  const ctx = canvas.getContext('2d');
+                  if (ctx) {
+                    const fontSpec = `${item.bold ? '700' : '400'} ${item.fontSize}px ${item.fontFamily}`;
+                    ctx.font = fontSpec;
+                  }
+                  const text = textNode.data || '';
+                  let lo = 0;
+                  let hi = text.length;
+                  // binary search by measured width to find offset faster
+                  while (lo < hi) {
+                    const mid = Math.floor((lo + hi) / 2);
+                    const w = ctx ? ctx.measureText(text.slice(0, mid)).width : mid * (item.fontSize * 0.6);
+                    if (w < (localX || 0)) lo = mid + 1;
+                    else hi = mid;
+                  }
+                  const offset = Math.max(0, Math.min(text.length, lo - 1));
+                  const r2 = document.createRange();
+                  r2.setStart(textNode, offset);
+                  r2.collapse(true);
+                  range = r2;
+                }
+              }
+
+              const sel = window.getSelection();
+              if (sel && range) {
+                sel.removeAllRanges();
+                sel.addRange(range);
+              }
+
+              // clear initial client coords so we don't reapply on future renders
+              try {
+                onChange({ initialClientX: undefined, initialClientY: undefined });
+              } catch (e) {
+                // ignore
+              }
+              return;
+            }
+          } catch (err) {
+            // swallow and fall back to measured approach below
+          }
+        }
+
+        // If point-based APIs failed or weren't available, compute an approximate caret offset
+        // using measured character width as a fallback.
+        if (typeof cx === 'number') {
+          const rect = node.getBoundingClientRect();
+          const cs = window.getComputedStyle(node);
+          const paddingLeft = parseFloat(cs.paddingLeft || '0');
+          const localX = cx - rect.left - paddingLeft;
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const fontSpec = `${item.bold ? '700' : '400'} ${item.fontSize}px ${item.fontFamily}`;
+            ctx.font = fontSpec;
+          }
+          const sampleWidth = ctx ? ctx.measureText('M').width : item.fontSize * 0.6;
+          const approxIndex = Math.max(0, Math.round((localX || 0) / (sampleWidth || 1)));
+
+          // find first text node (or create one) and place caret at approxIndex
+          const findTextNode = (n: Node): Text | null => {
+            for (const ch of Array.from(n.childNodes)) {
+              if (ch.nodeType === Node.TEXT_NODE) return ch as Text;
+              const found = findTextNode(ch);
+              if (found) return found;
+            }
+            return null;
+          };
+          let textNode = findTextNode(node);
+          if (!textNode) {
+            textNode = document.createTextNode('');
+            node.appendChild(textNode);
+          }
+          const offset = Math.min((textNode.data || '').length, approxIndex);
+          const r = document.createRange();
+          r.setStart(textNode, offset);
+          r.collapse(true);
+          const sel = window.getSelection();
+          if (sel) {
+            sel.removeAllRanges();
+            sel.addRange(r);
+          }
+
+          // clear initial client coords so we don't reapply on future renders
+          try {
+            onChange({ initialClientX: undefined, initialClientY: undefined });
+          } catch (e) {
+            // ignore
+          }
+          return;
+        }
+
+        // Ensure there is at least a caret range (start of node) if everything else fails
+        const fallbackRange = document.createRange();
+        fallbackRange.selectNodeContents(node);
+        fallbackRange.collapse(true);
+        const sel = window.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          sel.addRange(fallbackRange);
+        }
+      } catch (e) {
+        // ignore focus/selection failures
+      }
+    }
+  }, [selected, tool, item, onChange]);
+
   return (
     <div
-      className={clsx('text-box', { selected })}
+      className={clsx('text-box', { selected, 'grip-visible': selected && tool !== 'text' })}
       style={{
         left: item.x,
         top: item.y,
@@ -730,7 +895,9 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
       }}
     >
       {/* left grip for moving when selected - like the screenshot */}
-      {selected ? (
+      {/* show the left drag grip only when the box is selected and NOT in text-edit mode
+          to avoid the grip overlapping the contentEditable area while typing */}
+      {selected && tool !== 'text' ? (
         <div
           className="text-box__grip"
           onPointerDown={(event) => {

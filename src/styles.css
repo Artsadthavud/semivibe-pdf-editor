@@ -410,13 +410,15 @@ input {
 }
 
 /* left drag grip inside selected text box */
+/* place grip just outside the left edge of the text box so it doesn't push content */
 .text-box__grip {
   position: absolute;
-  left: 8px;
-  top: 8px;
-  bottom: 8px;
+  left: -56px; /* outside the box */
+  top: 50%;
+  transform: translateY(-50%);
   width: 44px;
-  border-radius: 8px;
+  height: 44px;
+  border-radius: 10px;
   background: linear-gradient(180deg, #1d4ed8, #2563eb);
   display: flex;
   align-items: center;
@@ -427,9 +429,7 @@ input {
   box-shadow: 0 6px 18px rgba(37, 99, 235, 0.12);
 }
 
-.text-box.selected .text-box__content {
-  margin-left: 52px;
-}
+/* no content margin when grip visible; grip sits outside the box */
 
 .grip-dots {
   font-size: 18px;

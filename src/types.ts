@@ -41,6 +41,9 @@ export type TextItem = {
   background: boolean;
   backgroundColor: string;
   singleLine?: boolean;
+  // optional transient fields used to position the caret when a new text box is created
+  initialClientX?: number;
+  initialClientY?: number;
 };
 
 export type AttachItem = {
