@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import clsx from 'clsx';
 import Canvas from './Canvas';
 import type { Page, Shape, ShapeType, Stroke, TextItem, ToolType } from './types';
@@ -80,7 +80,8 @@ const TOOL_META: Array<{ id: ToolType; label: string; hint: string }> = [
   { id: 'pen', label: 'Pen', hint: 'Pen tool (P)' },
   { id: 'highlighter', label: 'Highlight', hint: 'Highlighter (H)' },
   { id: 'shape', label: 'Shapes', hint: 'Shapes (S)' },
-  { id: 'text', label: 'Text', hint: 'Text tool (T)' }
+  { id: 'text', label: 'Text', hint: 'Text tool (T)' },
+  { id: 'eraser', label: 'Eraser', hint: 'Eraser (E)' }
 ];
 
 const App = () => {
@@ -98,11 +99,110 @@ const App = () => {
   const [shapeWidth, setShapeWidth] = useState(3);
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
   const [textDefaults, setTextDefaults] = useState<TextDefaults>(defaultText);
+  const [eraserWidth, setEraserWidth] = useState(24);
 
   const activePage = pages.find((page) => page.id === activePageId) ?? pages[0];
 
+  // HISTORY (undo / redo)
+  const applyingHistoryRef = useRef(false);
+  const mountedRef = useRef(false);
+
+  // store history in refs to avoid expensive rerenders; use a small state to force update when index changes
+  const MAX_HISTORY = 100;
+  const historyRef = useRef<{ pages: Page[]; activePageId: string }[]>([{ pages, activePageId }]);
+  const historyIndexRef = useRef(0);
+  const [, setHistoryVersion] = useState(0);
+
+  const pushHistory = useCallback((pagesSnapshot: Page[], activeId: string) => {
+    if (applyingHistoryRef.current) return;
+    const cut = historyRef.current.slice(0, historyIndexRef.current + 1);
+    const next = [...cut, { pages: pagesSnapshot, activePageId: activeId }];
+    // cap history length by dropping oldest entries
+    if (next.length > MAX_HISTORY) {
+      // remove the oldest entries so remaining length === MAX_HISTORY
+      next.splice(0, next.length - MAX_HISTORY);
+    }
+    historyRef.current = next;
+    historyIndexRef.current = historyRef.current.length - 1;
+    setHistoryVersion((v) => v + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      return;
+    }
+    pushHistory(pages, activePageId);
+  }, [pages, activePageId, pushHistory]);
+
+  const canUndo = () => historyIndexRef.current > 0;
+  const canRedo = () => historyIndexRef.current < historyRef.current.length - 1;
+
+  const undo = useCallback(() => {
+    if (!canUndo()) return;
+    const newIdx = historyIndexRef.current - 1;
+    const snap = historyRef.current[newIdx];
+    applyingHistoryRef.current = true;
+    setPages(snap.pages);
+    setActivePageId(snap.activePageId);
+    historyIndexRef.current = newIdx;
+    setHistoryVersion((v) => v + 1);
+    setTimeout(() => {
+      applyingHistoryRef.current = false;
+    }, 0);
+  }, []);
+
+  const redo = useCallback(() => {
+    if (!canRedo()) return;
+    const newIdx = historyIndexRef.current + 1;
+    const snap = historyRef.current[newIdx];
+    applyingHistoryRef.current = true;
+    setPages(snap.pages);
+    setActivePageId(snap.activePageId);
+    historyIndexRef.current = newIdx;
+    setHistoryVersion((v) => v + 1);
+    setTimeout(() => {
+      applyingHistoryRef.current = false;
+    }, 0);
+  }, []);
+
+  // keyboard shortcuts: Ctrl/Cmd+Z (undo), Ctrl/Cmd+Y or Ctrl+Shift+Z (redo)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const meta = e.ctrlKey || e.metaKey;
+      if (!meta) return;
+      if (e.key.toLowerCase() === 'z') {
+        if (e.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+        e.preventDefault();
+      } else if (e.key.toLowerCase() === 'y') {
+        redo();
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
+  // END HISTORY
+
   const updateActivePage = (fn: (page: Page) => Page) => {
-    setPages((prev) => prev.map((page) => (page.id === activePageId ? fn(page) : page)));
+    setPages((prev) => {
+      const newPages = prev.map((page) => (page.id === activePageId ? fn(page) : page));
+      // push snapshot after computing newPages
+      pushHistory(newPages, activePageId);
+      return newPages;
+    });
+  };
+
+  const handleEraseStroke = (id: string) => {
+    updateActivePage((page) => ({ ...page, strokes: page.strokes.filter((s) => s.id !== id) }));
+  };
+
+  const handleEraseShape = (id: string) => {
+    updateActivePage((page) => ({ ...page, shapes: page.shapes.filter((s) => s.id !== id) }));
   };
 
   const handleStrokeEnd = (stroke: Stroke) => {
@@ -252,6 +352,26 @@ const App = () => {
             }}
           />
           <div className="toolbar-actions">
+            <button
+              type="button"
+              className="toolbar-action"
+              onClick={undo}
+              disabled={!canUndo()}
+              aria-label="Undo"
+              title="Undo (Ctrl/Cmd+Z)"
+            >
+              Undo
+            </button>
+            <button
+              type="button"
+              className="toolbar-action"
+              onClick={redo}
+              disabled={!canRedo()}
+              aria-label="Redo"
+              title="Redo (Ctrl+Y / Ctrl+Shift+Z)"
+            >
+              Redo
+            </button>
             <button
               type="button"
               className="toolbar-action"
@@ -549,6 +669,9 @@ const App = () => {
           onTextCreate={handleTextCreate}
           onTextDelete={handleTextDelete}
           onTextSelect={handleTextSelect}
+          onEraseStroke={handleEraseStroke}
+          onEraseShape={handleEraseShape}
+          eraserWidth={eraserWidth}
         />
       </main>
 

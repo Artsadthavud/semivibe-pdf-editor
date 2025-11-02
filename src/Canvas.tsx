@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import type { Page, Shape, ShapeType, Stroke, TextItem, ToolType } from './types';
+// Using system cursors (crosshair/text/default) — remove SVG cursor imports to avoid bundler
+// resolution issues and keep behavior consistent across browsers.
 
 type CanvasProps = {
   page: Page;
@@ -20,6 +22,9 @@ type CanvasProps = {
   onTextCreate: (x: number, y: number) => void;
   onTextDelete: (id: string) => void;
   onTextSelect: (id: string | null) => void;
+  onEraseStroke?: (id: string) => void;
+  onEraseShape?: (id: string) => void;
+  eraserWidth?: number;
 };
 
 type DragState =
@@ -60,7 +65,10 @@ const Canvas = ({
   onTextChange,
   onTextCreate,
   onTextDelete,
-  onTextSelect
+  onTextSelect,
+  onEraseStroke,
+  onEraseShape,
+  eraserWidth
 }: CanvasProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -68,6 +76,7 @@ const Canvas = ({
   const strokeDraft = useRef<Stroke | null>(null);
   const shapeDraft = useRef<Shape | null>(null);
   const dragState = useRef<DragState | null>(null);
+  const isPointerDownRef = useRef(false);
 
   const drawStroke = useCallback(
     (ctx: CanvasRenderingContext2D, stroke: Stroke) => {
@@ -150,7 +159,7 @@ const Canvas = ({
     }
     ctx.restore();
   }, []);
-
+  
   const redraw = useCallback(
     (preview?: { stroke?: Stroke | null; shape?: Shape | null }) => {
       const canvas = canvasRef.current;
@@ -170,7 +179,7 @@ const Canvas = ({
         drawShape(ctx, preview.shape);
       }
     },
-    [drawShape, drawStroke, page.shapes, page.strokes]
+    [drawShape, drawStroke, page]
   );
 
   useEffect(() => {
@@ -199,6 +208,123 @@ const Canvas = ({
     return () => window.removeEventListener('resize', resize);
   }, [redraw]);
 
+  // --- eraser helpers (must be after redraw is defined) ---
+  const erasedIdsRef = useRef<Set<string>>(new Set());
+
+  const pointToSegmentDistance = (px: number, py: number, x1: number, y1: number, x2: number, y2: number) => {
+    const A = px - x1;
+    const B = py - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
+
+    const dot = A * C + B * D;
+    const lenSq = C * C + D * D;
+    let param = -1;
+    if (lenSq !== 0) param = dot / lenSq;
+
+    let xx: number, yy: number;
+    if (param < 0) {
+      xx = x1;
+      yy = y1;
+    } else if (param > 1) {
+      xx = x2;
+      yy = y2;
+    } else {
+      xx = x1 + param * C;
+      yy = y1 + param * D;
+    }
+
+    const dx = px - xx;
+    const dy = py - yy;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const eraseAt = useCallback(
+    (x: number, y: number) => {
+      const eraserSize = eraserWidth ?? 22;
+      // erase strokes by distance to segments
+      page.strokes.forEach((stroke) => {
+        if (erasedIdsRef.current.has(stroke.id)) return;
+        const threshold = (stroke.thickness || 1) / 2 + eraserSize / 2;
+        for (let i = 0; i < stroke.points.length - 1; i += 1) {
+          const p1 = stroke.points[i];
+          const p2 = stroke.points[i + 1];
+          const d = pointToSegmentDistance(x, y, p1.x, p1.y, p2.x, p2.y);
+          if (d <= threshold) {
+            erasedIdsRef.current.add(stroke.id);
+            onEraseStroke?.(stroke.id);
+            break;
+          }
+        }
+      });
+
+      // erase shapes by proximity to stroke path or inside bbox
+      page.shapes.forEach((shape) => {
+        if (erasedIdsRef.current.has(shape.id)) return;
+        const threshold = (shape.strokeWidth || 1) / 2 + eraserSize / 2;
+        const { start, end } = shape;
+        switch (shape.type) {
+          case 'line':
+          case 'arrow': {
+            const d = pointToSegmentDistance(x, y, start.x, start.y, end.x, end.y);
+            if (d <= threshold) {
+              erasedIdsRef.current.add(shape.id);
+              onEraseShape?.(shape.id);
+            }
+            break;
+          }
+          case 'rectangle': {
+            const left = Math.min(start.x, end.x);
+            const top = Math.min(start.y, end.y);
+            const right = Math.max(start.x, end.x);
+            const bottom = Math.max(start.y, end.y);
+            // if near border
+            const nearLeft = Math.abs(x - left) <= threshold && y >= top - threshold && y <= bottom + threshold;
+            const nearRight = Math.abs(x - right) <= threshold && y >= top - threshold && y <= bottom + threshold;
+            const nearTop = Math.abs(y - top) <= threshold && x >= left - threshold && x <= right + threshold;
+            const nearBottom = Math.abs(y - bottom) <= threshold && x >= left - threshold && x <= right + threshold;
+            if (nearLeft || nearRight || nearTop || nearBottom) {
+              erasedIdsRef.current.add(shape.id);
+              onEraseShape?.(shape.id);
+            }
+            break;
+          }
+          case 'ellipse': {
+            const centerX = (start.x + end.x) / 2;
+            const centerY = (start.y + end.y) / 2;
+            const rx = Math.max(Math.abs(end.x - start.x) / 2, 2);
+            const ry = Math.max(Math.abs(end.y - start.y) / 2, 2);
+            const nx = (x - centerX) / rx;
+            const ny = (y - centerY) / ry;
+            const dist = Math.sqrt(nx * nx + ny * ny);
+            // if near border (dist ~ 1)
+            if (Math.abs(dist - 1) * Math.max(rx, ry) <= threshold) {
+              erasedIdsRef.current.add(shape.id);
+              onEraseShape?.(shape.id);
+            }
+            break;
+          }
+          default:
+            break;
+        }
+      });
+      // erase text boxes if pointer inside their rect
+      page.texts.forEach((text) => {
+        if (erasedIdsRef.current.has(text.id)) return;
+        const left = text.x;
+        const top = text.y;
+        const right = text.x + text.width;
+        const bottom = text.y + Math.max(24, text.fontSize + 8);
+        if (x >= left && x <= right && y >= top && y <= bottom) {
+          erasedIdsRef.current.add(text.id);
+          onTextDelete(text.id);
+        }
+      });
+      redraw();
+    },
+    [onEraseShape, onEraseStroke, page.shapes, page.strokes, eraserWidth, redraw]
+  );
+
   const finishStroke = useCallback(() => {
     if (strokeDraft.current && strokeDraft.current.points.length > 1) {
       onStrokeEnd(strokeDraft.current);
@@ -222,6 +348,10 @@ const Canvas = ({
     const handleUp = () => {
       finishStroke();
       finishShape();
+      // mark pointer as released so eraser doesn't act on hover
+      isPointerDownRef.current = false;
+      // clear erased id set so next interaction can erase same items again
+      erasedIdsRef.current.clear();
     };
     window.addEventListener('pointerup', handleUp);
     return () => window.removeEventListener('pointerup', handleUp);
@@ -230,6 +360,7 @@ const Canvas = ({
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    isPointerDownRef.current = true;
     const rect = canvas.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
@@ -253,6 +384,13 @@ const Canvas = ({
         end: { x, y }
       };
       redraw({ shape: shapeDraft.current });
+      return;
+    }
+
+    if (tool === 'eraser') {
+      // start erasing at this point (clear previous erased ids for a fresh stroke)
+      erasedIdsRef.current.clear();
+      eraseAt(x, y);
       return;
     }
 
@@ -281,6 +419,13 @@ const Canvas = ({
         end: { x: event.clientX - rect.left, y: event.clientY - rect.top }
       };
       redraw({ shape: shapeDraft.current });
+      return;
+    }
+
+    if (tool === 'eraser') {
+      if (isPointerDownRef.current) {
+        eraseAt(event.clientX - rect.left, event.clientY - rect.top);
+      }
       return;
     }
 
@@ -331,20 +476,21 @@ const Canvas = ({
 
   return (
     <div className="canvas-area" ref={containerRef} onPointerDown={handleCanvasClick}>
-      <canvas
-        ref={canvasRef}
-        className="canvas-layer"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        style={{
-          cursor:
-            tool === 'pointer'
-              ? 'default'
-              : tool === 'text'
-                ? 'text'
-                : 'crosshair'
-        }}
-      />
+      {/** use system cursors (crosshair/text/default) per current preference */}
+      {
+        (() => {
+          const cursorForTool = tool === 'pointer' ? 'default' : tool === 'text' ? 'text' : 'crosshair';
+          return (
+            <canvas
+              ref={canvasRef}
+              className="canvas-layer"
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              style={{ cursor: cursorForTool }}
+            />
+          );
+        })()
+      }
       <div className="text-layer" style={{ width: size.width, height: size.height }}>
         {page.texts.map((text) => (
           <TextBox

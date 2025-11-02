@@ -1,4 +1,4 @@
-export type ToolType = 'pointer' | 'pen' | 'highlighter' | 'text' | 'shape';
+export type ToolType = 'pointer' | 'pen' | 'highlighter' | 'text' | 'shape' | 'eraser';
 
 export type Point = {
   x: number;
