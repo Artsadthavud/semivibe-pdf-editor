@@ -1296,80 +1296,53 @@ const App = () => {
           {/* toolbar-row end. Palette popover appears next when toggled */}
           {/* Attach card does not include colour controls (handled in the Pen/Highlighter card) */}
           {showPalette ? (
-    <div className="toolbar-palette-popover" role="dialog" aria-label="Colour palette" style={{ position: 'absolute', right: 12, top: '56px', background: '#fff', padding: 10, borderRadius: 8, boxShadow: '0 8px 30px rgba(15,23,42,0.12)', zIndex: 90 }}>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Pen</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', maxWidth: 320 }}>
-                  {penColors.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      className={clsx('swatch', { active: penColor === c })}
-                      style={{ backgroundColor: c, width: 28, height: 28 }}
-                      onClick={() => {
-                        setPenColor(c);
-                        setShowPalette(false);
-                      }}
-                      aria-label={`Select pen color ${c}`}
-                    />
-                  ))}
-                </div>
-                {/* simple swatch selector for pen (toolbar popover) */}
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', maxWidth: 320 }}>
-                    {penColors.map((c) => (
-                      <button
-                        key={c}
-                        type="button"
-                        className={clsx('swatch', { active: penColor === c })}
-                        style={{ backgroundColor: c, width: 28, height: 28 }}
-                        onClick={() => { setPenColor(c); setShowPalette(false); }}
-                        aria-label={`Select pen color ${c}`}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Highlighter</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', maxWidth: 320 }}>
-                  {highlightColors.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      className={clsx('swatch', { active: highlightColor === c })}
-                      style={{ backgroundColor: c, width: 28, height: 28 }}
-                      onClick={() => {
-                        setHighlightColor(c);
-                        setShowPalette(false);
-                      }}
-                      aria-label={`Select highlight colour ${c}`}
-                    />
-                  ))}
-                </div>
-                {/* simple swatch selector for highlighter (toolbar popover) */}
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', maxWidth: 320 }}>
-                    {highlightColors.map((c) => (
-                      <button
-                        key={c}
-                        type="button"
-                        className={clsx('swatch', { active: highlightColor === c })}
-                        style={{ backgroundColor: c, width: 28, height: 28 }}
-                        onClick={() => { setHighlightColor(c); setShowPalette(false); }}
-                        aria-label={`Select highlight colour ${c}`}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
-              <button type="button" className="toolbar-action" onClick={resetPalettes}>Reset palettes</button>
-            </div>
+    <div className="toolbar-palette-popover" role="dialog" aria-label="Colour palette">
+      <div className="popover-row">
+        <div>
+          <div className="popover-section-title">Pen</div>
+          <div className="swatch-grid">
+            {penColors.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={clsx('swatch', 'swatch-small', { active: penColor === c })}
+                style={{ backgroundColor: c }}
+                onClick={() => {
+                  setPenColor(c);
+                  setShowPalette(false);
+                }}
+                aria-label={`Select pen color ${c}`}
+              />
+            ))}
           </div>
+          <div className="popover-actions">
+            {/* duplicate simple selector removed; swatch-grid covers it */}
+          </div>
+        </div>
+
+        <div>
+          <div className="popover-section-title">Highlighter</div>
+          <div className="swatch-grid">
+            {highlightColors.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={clsx('swatch', 'swatch-small', { active: highlightColor === c })}
+                style={{ backgroundColor: c }}
+                onClick={() => {
+                  setHighlightColor(c);
+                  setShowPalette(false);
+                }}
+                aria-label={`Select highlight colour ${c}`}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="popover-actions">
+        <button type="button" className="toolbar-action" onClick={resetPalettes}>Reset palettes</button>
+      </div>
+    </div>
         ) : null}
 
         <div className="toolbar-row toolbar-row--cards">
@@ -1407,7 +1380,7 @@ const App = () => {
                   </button>
                 </div>
                 {showInlinePicker ? (
-                  <div ref={inlinePickerRef} style={{ marginTop: 8 }} className="inline-palette-popover">
+                  <div ref={inlinePickerRef} className="inline-palette-popover">
                     <ColorPicker
                       value={tool === 'highlighter' ? highlightColor : penColor}
                       onChange={(v) => {
@@ -1492,7 +1465,7 @@ const App = () => {
                   </button>
                 </div>
                 {showShapePicker ? (
-                  <div ref={shapePickerRef} style={{ marginTop: 8 }} className="inline-palette-popover">
+                  <div ref={shapePickerRef} className="inline-palette-popover">
                     <ColorPicker
                       value={shapeColor}
                       onChange={(v) => {
@@ -1501,7 +1474,7 @@ const App = () => {
                     />
                   </div>
                 ) : null}
-                <div style={{ marginTop: 8 }} className="shape-swatch-list">
+                <div className="shape-swatch-list">
                   {PEN_COLORS.map((color) => (
                     <button
                       key={color}
@@ -1539,15 +1512,36 @@ const App = () => {
                 <span className="setting-label">Upload</span>
                 <div className="attach-card">
                   <label className="attach-upload">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      style={{ display: 'none' }}
-                      onChange={(e) => handleFilesAdded(e.target.files)}
-                    />
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden-input"
+                        onChange={(e) => handleFilesAdded(e.target.files)}
+                      />
                     + Add images
                   </label>
+                  {uploadedAssets.length > 0 ? (
+                    <div className="attach-gallery">
+                      {uploadedAssets.map((a) => {
+                        const displayName = a.name.replace(/\.[^/.]+$/, '');
+                        return (
+                          <button
+                            key={a.id}
+                            type="button"
+                            className={clsx('attach-thumb', { active: selectedAssetId === a.id })}
+                            onClick={() => { setSelectedAssetId(a.id); setTool('attach'); }}
+                            title={`Select ${displayName}`}
+                          >
+                            <span className="attach-label">{displayName}</span>
+                            <div className="attach-preview" aria-hidden>
+                              <img src={a.url} alt={a.name} />
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                   {/* PDF import moved to its own section */}
                   {/* folder selection removed: project-assets and uploads are supported via the other controls */}
                   {/* Attach card intentionally has no colour controls; use Pen/Highlighter card to pick colours. */}
@@ -1617,11 +1611,11 @@ const App = () => {
                   </button>
                 </div>
                 {showTextColorPicker ? (
-                  <div ref={textColorPickerRef} style={{ marginTop: 8 }} className="inline-palette-popover">
+                  <div ref={textColorPickerRef} className="inline-palette-popover">
                     <ColorPicker value={textDefaults.color} onChange={(v) => handleTextStyleChange({ color: v })} />
                   </div>
                 ) : null}
-                <div style={{ marginTop: 8 }} className="text-swatch-list">
+                <div className="text-swatch-list">
                   {TEXT_COLORS.map((color) => (
                     <button
                       key={color}
@@ -1641,17 +1635,17 @@ const App = () => {
                     type="button"
                     className={clsx('toggle-pill', { active: textDefaults.background })}
                     onClick={() => handleTextStyleChange({ background: !textDefaults.background })}
-                    aria-pressed={textDefaults.background ? 'true' : 'false'}
+                    aria-pressed={textDefaults.background}
                     aria-label={textDefaults.background ? 'Hide background fill' : 'Show background fill'}
                   >
                     {textDefaults.background ? 'Visible' : 'Hidden'}
                   </button>
                 </div>
-                <div className="swatches swatches-bg" style={{ alignItems: 'center' }}>
+                <div className="swatches swatches-bg swatches-centered">
                   <button
                     type="button"
-                    className={clsx('swatch', 'swatch-active-preview', 'swatch-bg-preview')}
-                    style={{ backgroundColor: textDefaults.backgroundColor, width: 28, height: 28 }}
+                    className={clsx('swatch', 'swatch-active-preview', 'swatch-preview')}
+                    style={{ backgroundColor: textDefaults.backgroundColor }}
                     aria-label={`Active background colour ${textDefaults.backgroundColor}`}
                   />
                   <button
@@ -1677,7 +1671,7 @@ const App = () => {
                   ))}
                 </div>
                 {showTextBgPicker ? (
-                  <div ref={textBgPickerRef} style={{ marginTop: 8 }} className="inline-palette-popover">
+                  <div ref={textBgPickerRef} className="inline-palette-popover">
                     <ColorPicker value={textDefaults.backgroundColor} onChange={(v) => handleTextStyleChange({ backgroundColor: v })} />
                   </div>
                 ) : null}

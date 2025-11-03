@@ -305,6 +305,60 @@ input {
   box-shadow: 0 6px 12px rgba(15, 23, 42, 0.25);
 }
 
+/* Popover helpers moved from inline styles */
+.toolbar-palette-popover {
+  position: absolute;
+  right: 12px;
+  top: 56px;
+  background: #fff;
+  padding: 10px;
+  border-radius: 8px;
+  box-shadow: 0 8px 30px rgba(15,23,42,0.12);
+  z-index: 90;
+}
+.popover-row { display: flex; gap: 12px; }
+.popover-section-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.swatch-grid { display: flex; gap: 8px; flex-wrap: wrap; max-width: 320px; }
+.popover-actions { margin-top: 8px; display: flex; justify-content: flex-end; }
+.inline-palette-popover { margin-top: 8px; }
+.swatch-small { width: 28px; height: 28px; }
+.shape-swatch-list, .text-swatch-list { margin-top: 8px; display:flex; gap:8px; flex-wrap:wrap; }
+.swatches-centered { align-items: center; }
+.swatch-preview { width: 28px; height: 28px; border-radius: 8px; }
+.hidden-input { display: none; }
+.attach-gallery { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+.attach-thumb { width:56px; height:56px; padding:4px; border-radius:8px; border:1px solid transparent; background:#fff; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; }
+.attach-thumb img { max-width:100%; max-height:100%; border-radius:6px; }
+.attach-thumb.active { border-color: rgba(37, 99, 235, 0.8); box-shadow: 0 8px 16px rgba(37, 99, 235, 0.12); }
+
+/* show name as primary; reveal preview on hover */
+.attach-thumb { position: relative; overflow: visible; }
+.attach-label { display: inline-block; padding: 6px 10px; border-radius: 999px; background: #fff; border: 1px dashed rgba(15,23,42,0.06); color: #0f172a; font-weight:600; font-size:13px; }
+/* larger preview and keyboard-friendly visibility */
+.attach-preview {
+  display: none;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: -12px;
+  margin-top: -110%;
+  width: 320px; /* bigger hover preview */
+  max-width: calc(100vw - 48px);
+  box-shadow: 0 12px 30px rgba(15,23,42,0.12);
+  border-radius: 8px;
+  background: white;
+  padding: 8px;
+  z-index: 60;
+}
+.attach-preview img { width: 100%; height: auto; border-radius: 6px; display: block; }
+/* show preview on hover, focus (keyboard), active */
+.attach-thumb:hover .attach-preview,
+.attach-thumb:focus .attach-preview,
+.attach-thumb:focus-visible .attach-preview,
+.attach-thumb:active .attach-preview {
+  display: block;
+}
+
 /* Color picker styles */
 .color-picker {
   display: flex;
