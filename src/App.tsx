@@ -116,6 +116,27 @@ const createText = (x: number, y: number, defaults: TextDefaults): TextItem => (
   singleLine: false
 });
 
+let cachedPdfWorkerSrc: string | null = null;
+let pdfWorkerSrcPromise: Promise<string> | null = null;
+const getPdfWorkerSrc = async (): Promise<string> => {
+  if (cachedPdfWorkerSrc) return cachedPdfWorkerSrc;
+  if (!pdfWorkerSrcPromise) {
+    pdfWorkerSrcPromise = (async () => {
+      const mod = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+      const src = (mod as { default?: string }).default ?? (mod as unknown as string);
+      if (typeof src !== 'string' || !src) {
+        throw new Error('Unable to resolve pdf.js worker url.');
+      }
+      if (typeof window !== 'undefined') {
+        (window as any).__PDF_WORKER_URL = src;
+      }
+      cachedPdfWorkerSrc = src;
+      return src;
+    })();
+  }
+  return pdfWorkerSrcPromise;
+};
+
 const TOOL_META: Array<{ id: ToolType; label: string; hint: string }> = [
   { id: 'pointer', label: 'Pointer', hint: 'Pointer tool (Esc)' },
   { id: 'pen', label: 'Pen', hint: 'Pen tool (P)' },
@@ -959,118 +980,71 @@ const App = () => {
   // Import PDF and render pages to background attachments (uses pdfjs)
   const handlePdfUpload = async (file: File) => {
     try {
-  // begin import progress
-  setImportingPdf(true);
+      setImportingPdf(true);
       setImportProgress({ current: 0, total: 0 });
-  setWorkerStatus((typeof window !== 'undefined' && (window as any).__PDF_WORKER_URL) ? 'available' : 'unknown');
+      setWorkerStatus((typeof window !== 'undefined' && (window as any).__PDF_WORKER_URL) ? 'available' : 'unknown');
 
-  const arrayBuffer = await file.arrayBuffer();
-  // Make an explicit copy of the PDF bytes immediately so that if pdf.js
-  // transfers the original ArrayBuffer to a worker (detaching it), we still
-  // have an independent copy to use for lossless export/copyPages.
-  const originalBytes = new Uint8Array(arrayBuffer).slice();
+      const arrayBuffer = await file.arrayBuffer();
+      // Make an explicit copy of the PDF bytes immediately so that if pdf.js
+      // transfers the original ArrayBuffer to a worker (detaching it), we still
+      // have an independent copy to use for lossless export/copyPages.
+      const originalBytes = new Uint8Array(arrayBuffer).slice();
       const pdfjs = await import('pdfjs-dist');
-      if (!pdfjs) {
-        throw new Error('Unable to load pdfjs-dist module.');
-      }
+      if (!pdfjs) throw new Error('Unable to load pdfjs-dist module.');
+      const getDocument = pdfjs.getDocument || pdfjs.default?.getDocument;
+      const GlobalWorkerOptions = pdfjs.GlobalWorkerOptions || pdfjs.default?.GlobalWorkerOptions;
+      if (!getDocument) throw new Error('pdfjs-dist getDocument API not available.');
+      if (!GlobalWorkerOptions) throw new Error('pdfjs-dist GlobalWorkerOptions API not available.');
 
-      const getDocument =
-        pdfjs.getDocument ||
-        pdfjs.default?.getDocument;
-      const GlobalWorkerOptions =
-        pdfjs.GlobalWorkerOptions ||
-        pdfjs.default?.GlobalWorkerOptions;
-
-      if (!getDocument) {
-        throw new Error('pdfjs-dist getDocument API not available.');
-      }
-
-          // If the main entry has emitted a worker asset URL, use it so pdfjs can spawn a worker.
-          // The URL may be provided at build/dev time by importing the worker with ?url in src/main.tsx
-          // or we can try to import the worker ourselves from known candidate paths.
-          let workerUrl: string | undefined = typeof window !== 'undefined' ? (window as any).__PDF_WORKER_URL : undefined;
-
-          // If not available yet, try resolving common candidate specifiers so Vite emits the asset.
-          if (!workerUrl) {
-            const candidates = [
-              'pdfjs-dist/build/pdf.worker.mjs?url',
-              'pdfjs-dist/build/pdf.worker.min.mjs?url',
-              'pdfjs-dist/legacy/build/pdf.worker.mjs?url',
-              'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
-            ];
-            for (const spec of candidates) {
-              try {
-                // @ts-ignore
-                const mod = await import(/* @vite-ignore */ spec);
-                // some bundlers export the URL as default
-                // @ts-ignore
-                const url = (mod && (mod as any).default) || (mod as any);
-                if (url) {
-                  workerUrl = url;
-                  // also expose globally for other code that may look for it
-                  if (typeof window !== 'undefined') (window as any).__PDF_WORKER_URL = url;
-                  setWorkerStatus('available');
-                  break;
-                }
-              } catch (e) {
-                // try next candidate
-              }
-            }
-          }
-
-  let loading: any;
-      if (GlobalWorkerOptions) {
-        if (workerUrl) {
-          try {
-            GlobalWorkerOptions.workerSrc = workerUrl;
-            loading = getDocument({ data: arrayBuffer });
-          } catch (e) {
-            // worker assignment failed; fall back to main-thread rendering
-            setWorkerStatus('failed');
-            loading = getDocument({ data: arrayBuffer, disableWorker: true } as any);
-          }
-        } else {
-          // no worker url found, run on main thread
-          setWorkerStatus('disabled');
-          loading = getDocument({ data: arrayBuffer, disableWorker: true } as any);
+      let workerReady = false;
+      try {
+        if (!GlobalWorkerOptions.workerSrc || GlobalWorkerOptions.workerSrc === './pdf.worker.mjs') {
+          const workerSrc = await getPdfWorkerSrc();
+          GlobalWorkerOptions.workerSrc = workerSrc;
         }
-      } else {
-        // pdfjs has no GlobalWorkerOptions available; render on main thread
-        setWorkerStatus('disabled');
-        loading = getDocument({ data: arrayBuffer, disableWorker: true } as any);
+        workerReady = true;
+      } catch (workerErr) {
+        console.warn('Failed to configure pdf.js worker', workerErr);
       }
-  const pdf = await loading.promise;
-  const groupId = createId();
+      setWorkerStatus(workerReady ? 'available' : 'failed');
+      if (!workerReady) {
+        throw new Error('Unable to configure pdf.js worker bundle.');
+      }
+
+      const loading = getDocument({ data: arrayBuffer } as any);
+      const pdf = await loading.promise;
+      const groupId = createId();
       const pageIds: string[] = [];
       // clone current pages to mutate locally
       const localPages = pages.slice();
       const container = document.querySelector('.canvas-area') as HTMLElement | null;
       const containerWidth = container ? container.getBoundingClientRect().width : 800;
-  // Render imported PDF pages at high resolution to preserve quality.
-  // Use A4 @ 300 DPI as a target rasterization size to avoid visible quality loss when attaching.
-  const a4mm = { w: 210, h: 297 };
-  const DPI = 300;
-  const mmToInch = (mm: number) => mm / 25.4;
-  const targetW = Math.round(mmToInch(a4mm.w) * DPI);
-  const targetH = Math.round(mmToInch(a4mm.h) * DPI);
-  // initialize progress counters
-  setImportProgress({ current: 0, total: pdf.numPages });
+      // Render imported PDF pages at high resolution to preserve quality.
+      // Use A4 @ 300 DPI as a target rasterization size to avoid visible quality loss when attaching.
+      const a4mm = { w: 210, h: 297 };
+      const DPI = 300;
+      const mmToInch = (mm: number) => mm / 25.4;
+      const targetW = Math.round(mmToInch(a4mm.w) * DPI);
+      const targetH = Math.round(mmToInch(a4mm.h) * DPI);
+      // initialize progress counters
+      setImportProgress({ current: 0, total: pdf.numPages });
       for (let p = 1; p <= pdf.numPages; p += 1) {
         const pdfPage = await pdf.getPage(p);
-  const viewport = pdfPage.getViewport({ scale: 1 });
-  // choose a high rasterization scale so the resulting image preserves vector quality
-  // scale to A4@300dpi target width relative to the PDF page width
-  const scale = Math.max(1, targetW / viewport.width);
-  const renderViewport = pdfPage.getViewport({ scale });
+        const viewport = pdfPage.getViewport({ scale: 1 });
+        // choose a high rasterization scale so the resulting image preserves vector quality
+        // scale to A4@300dpi target width relative to the PDF page width
+        const scale = Math.max(1, targetW / viewport.width);
+        const renderViewport = pdfPage.getViewport({ scale });
         const canvas = document.createElement('canvas');
         canvas.width = Math.round(renderViewport.width);
         canvas.height = Math.round(renderViewport.height);
         const ctx = canvas.getContext('2d');
         if (!ctx) continue;
-        await pdfPage.render({ canvasContext: ctx, viewport: renderViewport }).promise;
+        // pdfjs types expect a `canvas` property on RenderParameters; pass the canvas element.
+        await pdfPage.render({ canvas, viewport: renderViewport } as any).promise;
         const blob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
         if (!blob) continue;
-  const url = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
         objectUrlsRef.current.add(url);
 
         // ensure localPages has a slot for this page
@@ -1105,8 +1079,8 @@ const App = () => {
       }
 
       // commit pages and record import group
-  setPages(localPages.map((pg, idx) => ({ ...pg, name: `Page ${idx + 1}` })));
-  setPdfImports((prev) => [...prev, { id: groupId, name: file.name, pageIds, data: originalBytes }]);
+      setPages(localPages.map((pg, idx) => ({ ...pg, name: `Page ${idx + 1}` })));
+      setPdfImports((prev) => [...prev, { id: groupId, name: file.name, pageIds, data: originalBytes }]);
       // select first page of the imported PDF
       if (pageIds.length > 0) setActivePageId(pageIds[0]);
       // done
@@ -1167,8 +1141,10 @@ const App = () => {
     };
     // track object URLs so we can revoke them when deleted
     if (src.startsWith('blob:')) objectUrlsRef.current.add(src);
-    updateActivePage((page) => ({ ...page, attachments: [...(page.attachments ?? []), attach] }));
-    setSelectedAttachId(id);
+  updateActivePage((page) => ({ ...page, attachments: [...(page.attachments ?? []), attach] }));
+  // Do not keep the newly placed attachment selected by default — this avoids
+  // staying 'focused' on the image after placement which can be surprising.
+  setSelectedAttachId(null);
     setTool('pointer');
 
     // Asynchronously load the image to size the attachment to its natural dimensions.

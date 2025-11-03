@@ -93,6 +93,7 @@ const Canvas = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const topCanvasRef = useRef<HTMLCanvasElement>(null);
   const imageCache = useRef<Map<string, HTMLImageElement>>(new Map());
   const [size, setSize] = useState({ width: 0, height: 0 });
   const strokeDraft = useRef<Stroke | null>(null);
@@ -278,8 +279,9 @@ const Canvas = ({
   // apply device pixel ratio only; visual zoom is handled by the viewport CSS transform
   ctx.scale(deviceRatio, deviceRatio);
 
-      // draw attachments first so strokes/shapes appear on top (write-over behavior)
-      (page.attachments ?? []).forEach((attach) => {
+  // draw attachments on the base canvas. Strokes/shapes are drawn on the top canvas
+  // so they can appear above editable text overlays (enables highlighting text).
+  (page.attachments ?? []).forEach((attach) => {
         try {
           const src = attach.src;
           let img = imageCache.current.get(src);
@@ -287,8 +289,13 @@ const Canvas = ({
             img = new Image();
             img.src = src;
             img.onload = () => {
-              // when image loads, trigger a redraw to show it
+              // when image loads, trigger a redraw of both layers
               redraw();
+              try {
+                redrawTop();
+              } catch (e) {
+                // ignore
+              }
             };
             imageCache.current.set(src, img);
           }
@@ -299,6 +306,23 @@ const Canvas = ({
           // ignore transient errors for invalid urls
         }
       });
+
+      // strokes/shapes are rendered to the top canvas (so they visually sit above
+      // the `text-layer` DOM nodes). We'll clear and draw them in the caller below
+      // using the top canvas's context.
+    },
+    [drawShape, drawStroke, page]
+  );
+
+  const redrawTop = useCallback(
+    (preview?: { stroke?: Stroke | null; shape?: Shape | null }) => {
+      const top = topCanvasRef.current;
+      const ctx = top?.getContext('2d');
+      if (!top || !ctx) return;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, top.width, top.height);
+      // apply device pixel ratio only; visual zoom is handled by the viewport CSS transform
+      ctx.scale(deviceRatio, deviceRatio);
 
       page.strokes.forEach((stroke) => drawStroke(ctx, stroke));
       page.shapes.forEach((shape) => drawShape(ctx, shape));
@@ -315,7 +339,8 @@ const Canvas = ({
 
   useEffect(() => {
     redraw();
-  }, [page.shapes, page.strokes, redraw]);
+    redrawTop();
+  }, [page.shapes, page.strokes, redraw, redrawTop]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -333,8 +358,17 @@ const Canvas = ({
       // set visible CSS size to the scaled layout size so visual bounds are correct
       canvas.style.width = `${Math.round(width * s)}px`;
       canvas.style.height = `${Math.round(height * s)}px`;
+      // top canvas must match backing size as well
+      const top = topCanvasRef.current;
+      if (top) {
+        top.width = Math.max(1, Math.round(width * deviceRatio));
+        top.height = Math.max(1, Math.round(height * deviceRatio));
+        top.style.width = `${Math.round(width * s)}px`;
+        top.style.height = `${Math.round(height * s)}px`;
+      }
       setSize({ width, height });
       redraw();
+      redrawTop();
     };
 
     resize();
@@ -528,6 +562,11 @@ const Canvas = ({
         }
       });
       redraw();
+      try {
+        redrawTop();
+      } catch (e) {
+        // ignore
+      }
     },
     [onEraseShape, onEraseStroke, page.shapes, page.strokes, eraserWidth, redraw]
   );
@@ -538,6 +577,9 @@ const Canvas = ({
     }
     strokeDraft.current = null;
     redraw();
+    try {
+      redrawTop();
+    } catch (e) {}
   }, [onStrokeEnd, redraw]);
 
   const finishShape = useCallback(() => {
@@ -549,6 +591,9 @@ const Canvas = ({
     }
     shapeDraft.current = null;
     redraw();
+    try {
+      redrawTop();
+    } catch (e) {}
   }, [onShapeComplete, redraw]);
 
   useEffect(() => {
@@ -565,7 +610,7 @@ const Canvas = ({
   }, [finishShape, finishStroke]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
+    const canvas = topCanvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
     isPointerDownRef.current = true;
@@ -597,7 +642,7 @@ const Canvas = ({
         start: { x, y },
         end: { x, y }
       };
-      redraw({ shape: shapeDraft.current });
+      redrawTop({ shape: shapeDraft.current });
       return;
     }
 
@@ -620,11 +665,11 @@ const Canvas = ({
       opacity: strokeTool === 'highlighter' ? highlightOpacity : undefined
     };
     strokeDraft.current = newStroke;
-    redraw({ stroke: newStroke });
+    redrawTop({ stroke: newStroke });
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
+    const canvas = topCanvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
     const rect = container.getBoundingClientRect();
@@ -634,7 +679,7 @@ const Canvas = ({
         ...shapeDraft.current,
         end: { x: (event.clientX - rect.left) / (scale || 1), y: (event.clientY - rect.top) / (scale || 1) }
       };
-      redraw({ shape: shapeDraft.current });
+      redrawTop({ shape: shapeDraft.current });
       return;
     }
 
@@ -650,13 +695,15 @@ const Canvas = ({
       x: (event.clientX - rect.left) / (scale || 1),
       y: (event.clientY - rect.top) / (scale || 1)
     });
-    redraw({ stroke: strokeDraft.current });
+    redrawTop({ stroke: strokeDraft.current });
   };
 
   const handleCanvasClick = () => {
+    // clicking the canvas should clear selection of text and attachments
     if (tool !== 'text') {
       onTextSelect(null);
     }
+    onAttachSelect?.(null);
   };
 
   useEffect(() => {
@@ -726,8 +773,6 @@ const Canvas = ({
               <canvas
                 ref={canvasRef}
                 className="canvas-layer"
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
                 style={{ cursor: cursorForTool }}
               />
               {/* Visual outline of the actual PDF/page bounds so users can tell where the page edge is when zoomed out */}
@@ -814,6 +859,25 @@ const Canvas = ({
           />
         ))}
               </div>
+              {/* top canvas renders strokes/shapes so highlights sit above editable text */}
+              <canvas
+                ref={topCanvasRef}
+                className="canvas-layer canvas-top"
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                style={{
+                  cursor: cursorForTool,
+                  // capture pointer events when in a drawing/erase/shape or text tool
+                  // so the top canvas can handle creating text and drawing.
+                  pointerEvents:
+                    tool === 'pen' || tool === 'highlighter' || tool === 'eraser' || tool === 'shape' || tool === 'text'
+                      ? 'auto'
+                      : 'none',
+                  position: 'absolute',
+                  left: 0,
+                  top: 0
+                }}
+              />
             </div>
           );
         })()
@@ -1187,8 +1251,31 @@ const AttachmentBox = ({ item, selected, tool, onSelect, onChange, onDelete, onD
     <div
       ref={ref}
       className={clsx('attachment-box', { selected })}
-      style={{ left: item.x * (scale || 1), top: item.y * (scale || 1), width: item.width * (scale || 1), height: item.height * (scale || 1) }}
+      style={{
+        left: item.x * (scale || 1),
+        top: item.y * (scale || 1),
+        width: item.width * (scale || 1),
+        height: item.height * (scale || 1),
+        // When a drawing tool or the text tool is active, let pointer events pass
+        // through so the underlying canvas receives them (enables write-over
+        // and creating text on top of attachments). For pointer/attach modes
+        // keep pointer events enabled so selection and dragging work.
+        pointerEvents:
+          tool === 'pen' || tool === 'highlighter' || tool === 'eraser' || tool === 'shape' || tool === 'text'
+            ? 'none'
+            : 'auto'
+      }}
       onPointerDown={(event) => {
+        // Allow drawing tools to pass the pointer event through to the canvas
+        // so users can draw/write over attachments. For pointer (move) tool we
+        // intercept to start dragging. For drawing tools (pen/highlighter/eraser/shape)
+        // do not stop propagation so canvas handlers receive the event.
+        if (tool === 'pen' || tool === 'highlighter' || tool === 'eraser' || tool === 'shape') {
+          // select the attachment but allow the event to bubble to the canvas
+          onSelect();
+          return;
+        }
+        // For other tools (pointer/attach/text) intercept the event to support selection/dragging
         event.stopPropagation();
         onSelect();
         if (tool === 'pointer') {
