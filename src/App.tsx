@@ -25,8 +25,30 @@ type TextDefaults = {
   backgroundColor: string;
 };
 
-const PEN_COLORS = ['#111827', '#1d4ed8', '#dc2626', '#f97316', '#059669', '#0ea5e9'];
-const HIGHLIGHT_COLORS = ['#fde047', '#fb7185', '#38bdf8', '#a855f7', '#4ade80'];
+const PEN_COLORS = [
+  '#0f172a', // near-black
+  '#111827',
+  '#1d4ed8', // blue
+  '#0ea5e9', // cyan
+  '#06b6d4',
+  '#059669', // green
+  '#10b981',
+  '#f97316', // orange
+  '#fb7185', // pink/red
+  '#dc2626', // red
+  '#7c3aed' // purple
+];
+const HIGHLIGHT_COLORS = [
+  '#fde047', // yellow
+  '#fef08a',
+  '#fb7185', // coral
+  '#fca5a5',
+  '#38bdf8', // light blue
+  '#7dd3fc',
+  '#a855f7', // violet
+  '#c084fc',
+  '#4ade80' // light green
+];
 const HIGHLIGHT_OPACITIES = [
   { label: 'Light', value: 0.35 },
   { label: 'Medium', value: 0.55 },
@@ -106,12 +128,53 @@ const TOOL_META: Array<{ id: ToolType; label: string; hint: string }> = [
 const App = () => {
   const firstPage = useMemo(() => createPage(0), []);
   const [pages, setPages] = useState<Page[]>([firstPage]);
+  const [showPalette, setShowPalette] = useState(false);
   const [activePageId, setActivePageId] = useState(firstPage.id);
   const [tool, setTool] = useState<ToolType>('pointer');
   const [penColor, setPenColor] = useState('#1d4ed8');
   const [penWidth, setPenWidth] = useState(4);
   const [highlightColor, setHighlightColor] = useState('#fde047');
   const [highlightWidth, setHighlightWidth] = useState(18);
+  // customizable color palettes (start with defaults, allow adding new colors)
+  const [penColors, setPenColors] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('penColors');
+      return raw ? JSON.parse(raw) : PEN_COLORS.slice();
+    } catch (e) {
+      return PEN_COLORS.slice();
+    }
+  });
+  const [highlightColors, setHighlightColors] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('highlightColors');
+      return raw ? JSON.parse(raw) : HIGHLIGHT_COLORS.slice();
+    } catch (e) {
+      return HIGHLIGHT_COLORS.slice();
+    }
+  });
+  const [newColor, setNewColor] = useState('#000000');
+  const addColor = (c: string) => {
+    if (!c) return;
+    if (tool === 'highlighter') {
+      setHighlightColors((prev) => {
+        const next = [c, ...prev.filter((p) => p !== c)];
+        try {
+          localStorage.setItem('highlightColors', JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
+      setHighlightColor(c);
+    } else {
+      setPenColors((prev) => {
+        const next = [c, ...prev.filter((p) => p !== c)];
+        try {
+          localStorage.setItem('penColors', JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
+      setPenColor(c);
+    }
+  };
   const [highlightOpacity, setHighlightOpacity] = useState(0.55);
   const [shapeType, setShapeType] = useState<ShapeType>('rectangle');
   const [shapeColor, setShapeColor] = useState('#1d4ed8');
@@ -262,7 +325,7 @@ const App = () => {
               } catch (e) {}
             }
 
-            // draw shapes
+            // draw shapes (overlay path)
             const drawShapeOverlay = (shape: Shape) => {
               ctxO.save();
               ctxO.strokeStyle = shape.stroke;
@@ -324,25 +387,6 @@ const App = () => {
               }
               ctxO.restore();
             };
-            for (const shape of pageModel.shapes) drawShapeOverlay(shape);
-
-            // draw strokes
-            for (const stroke of pageModel.strokes) {
-              if (!stroke.points || stroke.points.length < 2) continue;
-              ctxO.save();
-              ctxO.lineJoin = 'round';
-              ctxO.lineCap = 'round';
-              ctxO.lineWidth = (stroke.thickness || 1) * Math.max(scaleXov, scaleYov);
-              ctxO.strokeStyle = stroke.color;
-              ctxO.globalAlpha = stroke.tool === 'highlighter' ? stroke.opacity ?? 0.55 : 1;
-              ctxO.beginPath();
-              ctxO.moveTo(stroke.points[0].x * scaleXov, stroke.points[0].y * scaleYov);
-              for (let i = 1; i < stroke.points.length; i++) {
-                ctxO.lineTo(stroke.points[i].x * scaleXov, stroke.points[i].y * scaleYov);
-              }
-              ctxO.stroke();
-              ctxO.restore();
-            }
 
             // draw texts
             for (const text of pageModel.texts) {
@@ -1171,81 +1215,22 @@ const App = () => {
             value={tool}
             onChange={(next) => {
               setTool(next);
-              if (next !== 'text') {
-                setSelectedTextId(null);
-              }
+              if (next !== 'text') setSelectedTextId(null);
             }}
           />
+
           <div className="toolbar-actions">
-            <button
-              type="button"
-              className="toolbar-action"
-              onClick={undo}
-              disabled={!canUndo()}
-              aria-label="Undo"
-              title="Undo (Ctrl/Cmd+Z)"
-            >
-              Undo
-            </button>
-            <button
-              type="button"
-              className="toolbar-action"
-              onClick={redo}
-              disabled={!canRedo()}
-              aria-label="Redo"
-              title="Redo (Ctrl+Y / Ctrl+Shift+Z)"
-            >
-              Redo
-            </button>
-            <button
-              type="button"
-              className="toolbar-action"
-              onClick={() => {
-                setTool('text');
-                setSelectedTextId(null);
-              }}
-              title="Switch to text tool (T)"
-            >
-              Text tool
-            </button>
-            <button type="button" className="toolbar-action" onClick={handleClearPage}>
-              Clear page
-            </button>
+            <button type="button" className="toolbar-action" onClick={undo} disabled={!canUndo()} aria-label="Undo" title="Undo (Ctrl/Cmd+Z)">Undo</button>
+            <button type="button" className="toolbar-action" onClick={redo} disabled={!canRedo()} aria-label="Redo" title="Redo (Ctrl+Y / Ctrl+Shift+Z)">Redo</button>
+            <button type="button" className="toolbar-action" onClick={() => { setTool('text'); setSelectedTextId(null); }} title="Switch to text tool (T)">Text tool</button>
+            <button type="button" className="toolbar-action" onClick={handleClearPage}>Clear page</button>
             <button type="button" className="toolbar-action" onClick={handleExportPdf}>Export PDF</button>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginLeft: 6 }}>
-              <button
-                type="button"
-                className="toolbar-action"
-                onClick={() => setZoom((z) => Math.max(0.25, Math.round((z - 0.1) * 100) / 100))}
-                title="Zoom out"
-                aria-label="Zoom out"
-              >
-                −
-              </button>
-              <button
-                type="button"
-                className="toolbar-action"
-                onClick={() => setZoom(1)}
-                title="Reset zoom"
-                aria-label="Reset zoom"
-              >
-                {Math.round(zoom * 100)}%
-              </button>
-              <button
-                type="button"
-                className="toolbar-action"
-                onClick={() => setZoom((z) => Math.min(4, Math.round((z + 0.1) * 100) / 100))}
-                title="Zoom in"
-                aria-label="Zoom in"
-              >
-                +
-              </button>
-            </div>
+            <button type="button" className="toolbar-action" onClick={() => setZoom((z) => Math.max(0.25, Math.round((z - 0.1) * 100) / 100))} title="Zoom out" aria-label="Zoom out">-</button>
+            <button type="button" className="toolbar-action" onClick={() => setZoom(1)} title="Reset zoom" aria-label="Reset zoom">{Math.round(zoom * 100)}%</button>
+            <button type="button" className="toolbar-action" onClick={() => setZoom((z) => Math.min(4, Math.round((z + 0.1) * 100) / 100))} title="Zoom in" aria-label="Zoom in">+</button>
           </div>
-          {/* worker availability indicator */}
-          <div
-            className={"worker-badge " + (workerStatus || 'unknown')}
-            title={
+
+          <div className={`worker-badge ${workerStatus || 'unknown'}`} title={
               workerStatus === 'available'
                 ? 'PDF worker available (imports use a worker)'
                 : workerStatus === 'failed'
@@ -1253,9 +1238,7 @@ const App = () => {
                 : workerStatus === 'disabled'
                 ? 'No PDF worker available; rendering will run on the main thread'
                 : 'PDF worker status unknown'
-            }
-            aria-live="polite"
-          >
+            } aria-live="polite">
             {workerStatus === 'available' && 'Worker: on'}
             {workerStatus === 'failed' && 'Worker: failed (fallback)'}
             {workerStatus === 'disabled' && 'Worker: off'}
