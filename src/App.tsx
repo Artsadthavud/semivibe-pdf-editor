@@ -269,6 +269,42 @@ const App = () => {
   // zoom (scale) for the workspace canvas
   const [zoom, setZoom] = useState<number>(1);
 
+  // Improve zoom UX: support Ctrl/Cmd + mouse wheel to zoom centered at the cursor
+  useEffect(() => {
+    const onWheel = (e: WheelEvent) => {
+      try {
+        if (!(e.ctrlKey || e.metaKey)) return;
+        const container = document.querySelector('.canvas-area') as HTMLElement | null;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        // ignore wheel events outside the canvas area
+        if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+        e.preventDefault();
+        const oldZoom = zoom || 1;
+        const delta = -e.deltaY;
+        const factor = delta > 0 ? 1.12 : 0.88;
+        const newZoom = Math.max(0.2, Math.min(3, oldZoom * factor));
+
+        // compute logical content coordinate of the mouse point
+        const offsetX = e.clientX - rect.left;
+        const offsetY = e.clientY - rect.top;
+        const contentX = (offsetX + container.scrollLeft) / oldZoom;
+        const contentY = (offsetY + container.scrollTop) / oldZoom;
+
+        setZoom(newZoom);
+        // adjust scroll so the same content point remains under the cursor
+        requestAnimationFrame(() => {
+          container.scrollLeft = Math.max(0, Math.round(contentX * newZoom - offsetX));
+          container.scrollTop = Math.max(0, Math.round(contentY * newZoom - offsetY));
+        });
+      } catch (err) {
+        // ignore
+      }
+    };
+    window.addEventListener('wheel', onWheel, { passive: false });
+    return () => window.removeEventListener('wheel', onWheel as EventListener);
+  }, [zoom]);
+
   // load project-scoped assets from src/assets at build time (Vite import.meta.glob)
   useEffect(() => {
     // This uses Vite's import.meta.glob to bundle image URLs from src/assets.
@@ -1115,12 +1151,17 @@ const App = () => {
   // Attach handlers
   const handleAttachCreate = (x: number, y: number, src: string, name?: string) => {
     const id = createId();
+    // Insert a small temporary attachment so the UI updates immediately.
+    const tempWidth = 120;
+    const tempHeight = 90;
+    const left = Math.max(0, Math.round(x - tempWidth / 2));
+    const top = Math.max(0, Math.round(y - tempHeight / 2));
     const attach: AttachItem = {
       id,
-      x,
-      y,
-      width: 240,
-      height: 160,
+      x: left,
+      y: top,
+      width: tempWidth,
+      height: tempHeight,
       src,
       name: name ?? ''
     };
@@ -1129,6 +1170,50 @@ const App = () => {
     updateActivePage((page) => ({ ...page, attachments: [...(page.attachments ?? []), attach] }));
     setSelectedAttachId(id);
     setTool('pointer');
+
+    // Asynchronously load the image to size the attachment to its natural dimensions.
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const naturalW = img.naturalWidth || img.width || tempWidth;
+          const naturalH = img.naturalHeight || img.height || tempHeight;
+
+          // Prevent extremely large images from overflowing the canvas area by capping to container size.
+          const container = document.querySelector('.canvas-area') as HTMLElement | null;
+          const containerW = container ? Math.max(80, Math.round(container.getBoundingClientRect().width)) : 800;
+          const containerH = container ? Math.max(60, Math.round(container.getBoundingClientRect().height)) : 600;
+          const maxW = Math.max(80, Math.round(containerW * 0.9));
+          const maxH = Math.max(60, Math.round(containerH * 0.9));
+
+          let newW = naturalW;
+          let newH = naturalH;
+          const ratio = naturalW && naturalH ? naturalW / naturalH : 1;
+          if (newW > maxW) {
+            newW = maxW;
+            newH = Math.max(1, Math.round(newW / ratio));
+          }
+          if (newH > maxH) {
+            newH = maxH;
+            newW = Math.max(1, Math.round(newH * ratio));
+          }
+
+          const newLeft = Math.max(0, Math.round(x - newW / 2));
+          const newTop = Math.max(0, Math.round(y - newH / 2));
+
+          // Update the attachment dimensions and position
+          handleAttachChange(id, { width: newW, height: newH, x: newLeft, y: newTop });
+        } catch (e) {
+          // ignore sizing errors and keep the temporary size
+        }
+      };
+      img.onerror = () => {
+        // leave temporary size if load fails
+      };
+      img.src = src;
+    } catch (e) {
+      // ignore image loading errors
+    }
   };
 
   const handleAttachChange = (id: string, changes: Partial<AttachItem>) => {

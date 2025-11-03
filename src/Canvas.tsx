@@ -48,6 +48,9 @@ type DragState =
       id: string;
       startWidth: number;
       originX: number;
+      // optional vertical resize support
+      startHeight?: number;
+      originY?: number;
     };
 
 const deviceRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
@@ -677,18 +680,24 @@ const Canvas = ({
         }
       } else {
         const s = scale || 1;
-        const width = Math.max(120, state.startWidth + ((event.clientX - rect.left) / s - state.originX));
         const isText = page.texts.some((t) => t.id === state.id);
+        const originX = (state as any).originX ?? 0;
+        const originY = (state as any).originY ?? 0;
+        const startW = (state as any).startWidth ?? 120;
+        const startH = (state as any).startHeight ?? 24;
+        const dx = (event.clientX - rect.left) / s - originX;
+        const dy = (event.clientY - rect.top) / s - originY;
+        const newW = Math.max(60, Math.round(startW + dx));
+        const newH = Math.max(24, Math.round(startH + dy));
+
         if (isText) {
-          onTextChange(state.id, { width });
+          onTextChange(state.id, { width: newW });
         } else {
-          // maintain aspect ratio for attachments: scale height in proportion
           const attach = page.attachments?.find((a) => a.id === state.id);
           if (attach) {
-            const ratio = attach.height / Math.max(attach.width, 1);
-            onAttachChange?.(state.id, { width, height: Math.max(60, Math.round(width * ratio)) });
+            onAttachChange?.(state.id, { width: newW, height: newH });
           } else {
-            onAttachChange?.(state.id, { width });
+            onAttachChange?.(state.id, { width: newW });
           }
         }
       }
@@ -759,7 +768,9 @@ const Canvas = ({
                 type: 'resize',
                 id: text.id,
                 startWidth: text.width,
-                originX: (event.clientX - rect.left) / s
+                startHeight: Math.max(24, text.fontSize + 8),
+                originX: (event.clientX - rect.left) / s,
+                originY: (event.clientY - rect.top) / s
               };
             }}
           />
@@ -795,7 +806,9 @@ const Canvas = ({
                 type: 'resize',
                 id: attach.id,
                 startWidth: attach.width,
-                originX: (event.clientX - rect.left) / s
+                startHeight: attach.height,
+                originX: (event.clientX - rect.left) / s,
+                originY: (event.clientY - rect.top) / s
               };
             }}
           />
