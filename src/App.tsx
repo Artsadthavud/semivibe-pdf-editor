@@ -1243,9 +1243,6 @@ const App = () => {
     // prevent deleting PDF-imported backgrounds
     const attach = activePage.attachments?.find((a) => a.id === id);
     if (attach?.locked) {
-      // ignore deletion for locked attachments
-      // eslint-disable-next-line no-alert
-      alert('This background was imported from a PDF and cannot be deleted here. Use the Import list to remove it.');
       return;
     }
     // revoke object URL if we created it earlier
