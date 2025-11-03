@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
+import type { ChangeEvent } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import clsx from 'clsx';
 import Canvas from './Canvas';
@@ -147,6 +148,10 @@ const TOOL_META: Array<{ id: ToolType; label: string; hint: string }> = [
   { id: 'eraser', label: 'Eraser', hint: 'Eraser (E)' }
 ];
 
+const ZOOM_MIN = 0.2;
+const ZOOM_MAX = 3;
+const clampZoom = (value: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
+
 const App = () => {
   const firstPage = useMemo(() => createPage(0), []);
   const [pages, setPages] = useState<Page[]>([firstPage]);
@@ -289,6 +294,51 @@ const App = () => {
   const [workerStatus, setWorkerStatus] = useState<'available' | 'disabled' | 'failed' | 'unknown'>('unknown');
   // zoom (scale) for the workspace canvas
   const [zoom, setZoom] = useState<number>(1);
+  const updateZoom = useCallback(
+    (next: number | ((prev: number) => number), anchor?: { x: number; y: number }) => {
+      setZoom((prevZoom) => {
+        const current = prevZoom || 1;
+        const rawTarget = typeof next === 'function' ? next(current) : next;
+        const numericTarget = typeof rawTarget === 'number' && Number.isFinite(rawTarget) ? rawTarget : current;
+        const target = clampZoom(numericTarget);
+        if (Math.abs(target - current) < 0.001) return current;
+        const container = document.querySelector('.canvas-area') as HTMLElement | null;
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          const anchorX = anchor?.x ?? rect.left + rect.width / 2;
+          const anchorY = anchor?.y ?? rect.top + rect.height / 2;
+          const offsetX = anchorX - rect.left;
+          const offsetY = anchorY - rect.top;
+          const contentX = (offsetX + container.scrollLeft) / current;
+          const contentY = (offsetY + container.scrollTop) / current;
+          requestAnimationFrame(() => {
+            container.scrollLeft = Math.max(0, Math.round(contentX * target - offsetX));
+            container.scrollTop = Math.max(0, Math.round(contentY * target - offsetY));
+          });
+        }
+        return target;
+      });
+    },
+    []
+  );
+  const handleZoomIn = useCallback(() => {
+    updateZoom((prev) => prev * 1.2);
+  }, [updateZoom]);
+  const handleZoomOut = useCallback(() => {
+    updateZoom((prev) => prev / 1.2);
+  }, [updateZoom]);
+  const handleZoomReset = useCallback(() => {
+    updateZoom(1);
+  }, [updateZoom]);
+  const handleZoomSliderChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const value = Number(event.target.value);
+    if (Number.isFinite(value)) {
+      updateZoom(value);
+    }
+  }, [updateZoom]);
+  const zoomPercent = Math.round(zoom * 100);
+  const isZoomAtMin = zoom <= ZOOM_MIN + 0.001;
+  const isZoomAtMax = zoom >= ZOOM_MAX - 0.001;
 
   // Improve zoom UX: support Ctrl/Cmd + mouse wheel to zoom centered at the cursor
   useEffect(() => {
@@ -301,30 +351,16 @@ const App = () => {
         // ignore wheel events outside the canvas area
         if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
         e.preventDefault();
-        const oldZoom = zoom || 1;
         const delta = -e.deltaY;
         const factor = delta > 0 ? 1.12 : 0.88;
-        const newZoom = Math.max(0.2, Math.min(3, oldZoom * factor));
-
-        // compute logical content coordinate of the mouse point
-        const offsetX = e.clientX - rect.left;
-        const offsetY = e.clientY - rect.top;
-        const contentX = (offsetX + container.scrollLeft) / oldZoom;
-        const contentY = (offsetY + container.scrollTop) / oldZoom;
-
-        setZoom(newZoom);
-        // adjust scroll so the same content point remains under the cursor
-        requestAnimationFrame(() => {
-          container.scrollLeft = Math.max(0, Math.round(contentX * newZoom - offsetX));
-          container.scrollTop = Math.max(0, Math.round(contentY * newZoom - offsetY));
-        });
+        updateZoom((prev) => prev * factor, { x: e.clientX, y: e.clientY });
       } catch (err) {
         // ignore
       }
     };
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => window.removeEventListener('wheel', onWheel as EventListener);
-  }, [zoom]);
+  }, [updateZoom]);
 
   // load project-scoped assets from src/assets at build time (Vite import.meta.glob)
   useEffect(() => {
@@ -1195,7 +1231,11 @@ const App = () => {
   const handleAttachChange = (id: string, changes: Partial<AttachItem>) => {
     updateActivePage((page) => ({
       ...page,
-      attachments: (page.attachments ?? []).map((a) => (a.id === id ? { ...a, ...changes } : a))
+      attachments: (page.attachments ?? []).map((a) => {
+        if (a.id !== id) return a;
+        if (a.locked) return a;
+        return { ...a, ...changes };
+      })
     }));
   };
 
@@ -1222,6 +1262,12 @@ const App = () => {
   };
 
   const handleAttachSelect = (id: string | null) => {
+    if (!id) {
+      setSelectedAttachId(null);
+      return;
+    }
+    const target = activePage.attachments?.find((a) => a.id === id);
+    if (target?.locked) return;
     setSelectedAttachId(id);
   };
 
@@ -1407,6 +1453,48 @@ const App = () => {
         ) : null}
 
         <div className="toolbar-row toolbar-row--cards">
+          <section className="control-card control-card--zoom">
+            <div className="card-header">
+              <span className="card-label">Zoom</span>
+              <span className="card-value">{zoomPercent}%</span>
+            </div>
+            <div className="card-body card-body--zoom">
+              <div className="zoom-controls">
+                <button
+                  type="button"
+                  className="zoom-button"
+                  onClick={handleZoomOut}
+                  disabled={isZoomAtMin}
+                  aria-label="Zoom out"
+                >
+                  −
+                </button>
+                <input
+                  className="density-slider zoom-slider"
+                  type="range"
+                  min={ZOOM_MIN}
+                  max={ZOOM_MAX}
+                  step={0.05}
+                  value={zoom}
+                  onChange={handleZoomSliderChange}
+                  aria-label="Zoom level"
+                />
+                <button
+                  type="button"
+                  className="zoom-button"
+                  onClick={handleZoomIn}
+                  disabled={isZoomAtMax}
+                  aria-label="Zoom in"
+                >
+                  +
+                </button>
+                <button type="button" className="toolbar-action zoom-reset" onClick={handleZoomReset}>
+                  Reset
+                </button>
+              </div>
+            </div>
+          </section>
+
           <section className="control-card">
             <div className="card-header">
               <span className="card-label">Pen / Highlighter</span>

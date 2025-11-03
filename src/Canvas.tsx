@@ -349,22 +349,21 @@ const Canvas = ({
 
     const resize = () => {
       const rect = container.getBoundingClientRect();
-      const width = rect.width;
-      const height = rect.height;
-      const s = scale || 1;
+      const width = Math.max(1, rect.width);
+      const height = Math.max(1, rect.height);
       // internal canvas backing pixels should account for device pixel ratio only
       canvas.width = Math.max(1, Math.round(width * deviceRatio));
       canvas.height = Math.max(1, Math.round(height * deviceRatio));
-      // set visible CSS size to the scaled layout size so visual bounds are correct
-      canvas.style.width = `${Math.round(width * s)}px`;
-      canvas.style.height = `${Math.round(height * s)}px`;
+      // visible CSS size matches logical size; zoom is applied via transform
+      canvas.style.width = `${Math.round(width)}px`;
+      canvas.style.height = `${Math.round(height)}px`;
       // top canvas must match backing size as well
       const top = topCanvasRef.current;
       if (top) {
         top.width = Math.max(1, Math.round(width * deviceRatio));
         top.height = Math.max(1, Math.round(height * deviceRatio));
-        top.style.width = `${Math.round(width * s)}px`;
-        top.style.height = `${Math.round(height * s)}px`;
+        top.style.width = `${Math.round(width)}px`;
+        top.style.height = `${Math.round(height)}px`;
       }
       setSize({ width, height });
       redraw();
@@ -374,24 +373,7 @@ const Canvas = ({
     resize();
     window.addEventListener('resize', resize);
     return () => window.removeEventListener('resize', resize);
-  }, [redraw, scale]);
-
-  // update viewport transform and layout size so the scaled content can be scrolled
-  useEffect(() => {
-    const vp = viewportRef.current;
-    if (!vp) return;
-    const s = scale || 1;
-    // We avoid CSS transform (which doesn't affect layout for overflow). Instead
-    // set the layout/CSS size of the viewport and the visible canvas to the
-    // scaled size so the container's scrollbars reflect the visual bounds.
-    vp.style.transform = 'none';
-    vp.style.transformOrigin = '0 0';
-    vp.style.width = `${Math.round(size.width * s)}px`;
-    vp.style.height = `${Math.round(size.height * s)}px`;
-    // ensure the visible canvas element matches the scaled layout size
-    const canvas = canvasRef.current;
-    // canvas CSS size is handled in the resize effect (which also depends on scale)
-  }, [scale, size.width, size.height]);
+  }, [redraw, redrawTop]);
 
   // drag & drop for attachments
   const handleDragOver = (e: React.DragEvent) => {
@@ -403,10 +385,10 @@ const Canvas = ({
     e.preventDefault();
     const container = containerRef.current;
     if (!container) return;
-  const rect = container.getBoundingClientRect();
-  const s = scale || 1;
-  const x = (e.clientX - rect.left) / s;
-  const y = (e.clientY - rect.top) / s;
+    const rect = container.getBoundingClientRect();
+    const s = scale || 1;
+    const x = (e.clientX - rect.left + container.scrollLeft) / s;
+    const y = (e.clientY - rect.top + container.scrollTop) / s;
     // prefer files (images) when dropped; some platforms include a text/plain
     // entry (for example a blob URL) which should not create a text box for images.
     const file = e.dataTransfer?.files?.[0];
@@ -615,8 +597,9 @@ const Canvas = ({
     if (!canvas || !container) return;
     isPointerDownRef.current = true;
     const rect = container.getBoundingClientRect();
-    const x = (event.clientX - rect.left) / (scale || 1);
-    const y = (event.clientY - rect.top) / (scale || 1);
+    const s = scale || 1;
+    const x = (event.clientX - rect.left + container.scrollLeft) / s;
+    const y = (event.clientY - rect.top + container.scrollTop) / s;
 
     if (tool === 'pointer') return;
 
@@ -673,11 +656,14 @@ const Canvas = ({
     const container = containerRef.current;
     if (!canvas || !container) return;
     const rect = container.getBoundingClientRect();
+    const s = scale || 1;
+    const clientX = event.clientX - rect.left + container.scrollLeft;
+    const clientY = event.clientY - rect.top + container.scrollTop;
 
     if (shapeDraft.current) {
       shapeDraft.current = {
         ...shapeDraft.current,
-        end: { x: (event.clientX - rect.left) / (scale || 1), y: (event.clientY - rect.top) / (scale || 1) }
+        end: { x: clientX / s, y: clientY / s }
       };
       redrawTop({ shape: shapeDraft.current });
       return;
@@ -685,15 +671,15 @@ const Canvas = ({
 
     if (tool === 'eraser') {
       if (isPointerDownRef.current) {
-        eraseAt((event.clientX - rect.left) / (scale || 1), (event.clientY - rect.top) / (scale || 1));
+        eraseAt(clientX / s, clientY / s);
       }
       return;
     }
 
     if (!strokeDraft.current) return;
     strokeDraft.current.points.push({
-      x: (event.clientX - rect.left) / (scale || 1),
-      y: (event.clientY - rect.top) / (scale || 1)
+      x: clientX / s,
+      y: clientY / s
     });
     redrawTop({ stroke: strokeDraft.current });
   };
@@ -716,8 +702,10 @@ const Canvas = ({
 
       if (state.type === 'move') {
         const s = scale || 1;
-        const x = (event.clientX - rect.left) / s - state.offsetX;
-        const y = (event.clientY - rect.top) / s - state.offsetY;
+        const clientX = event.clientX - rect.left + container.scrollLeft;
+        const clientY = event.clientY - rect.top + container.scrollTop;
+        const x = clientX / s - state.offsetX;
+        const y = clientY / s - state.offsetY;
         // decide whether this id is a text or an attachment
         const isText = page.texts.some((t) => t.id === state.id);
         if (isText) {
@@ -732,8 +720,10 @@ const Canvas = ({
         const originY = (state as any).originY ?? 0;
         const startW = (state as any).startWidth ?? 120;
         const startH = (state as any).startHeight ?? 24;
-        const dx = (event.clientX - rect.left) / s - originX;
-        const dy = (event.clientY - rect.top) / s - originY;
+        const clientX = event.clientX - rect.left + container.scrollLeft;
+        const clientY = event.clientY - rect.top + container.scrollTop;
+        const dx = clientX / s - originX;
+        const dy = clientY / s - originY;
         const newW = Math.max(60, Math.round(startW + dx));
         const newH = Math.max(24, Math.round(startH + dy));
 
@@ -762,126 +752,142 @@ const Canvas = ({
     };
   }, [onTextChange]);
 
+  const cursorForTool = tool === 'pointer' ? 'default' : tool === 'text' ? 'text' : 'crosshair';
+  const zoom = scale || 1;
+  const baseWidth = Math.max(1, size.width);
+  const baseHeight = Math.max(1, size.height);
+
   return (
     <div className="canvas-area" ref={containerRef} onPointerDown={handleCanvasClick} onDrop={handleDrop} onDragOver={handleDragOver}>
-      {/** viewport is scaled for zoom; keep transform-origin top-left so logical coords are preserved */}
-      {
-        (() => {
-          const cursorForTool = tool === 'pointer' ? 'default' : tool === 'text' ? 'text' : 'crosshair';
-          return (
-            <div ref={viewportRef} className="canvas-viewport">
-              <canvas
-                ref={canvasRef}
-                className="canvas-layer"
-                style={{ cursor: cursorForTool }}
-              />
-              {/* Visual outline of the actual PDF/page bounds so users can tell where the page edge is when zoomed out */}
-              <div
-                className="page-outline"
-                aria-hidden={true}
-                style={{ left: 0, top: 0, width: size.width * (scale || 1), height: size.height * (scale || 1) }}
-              />
-              <div className="text-layer" style={{ width: size.width * (scale || 1), height: size.height * (scale || 1) }}>
-        {page.texts.map((text) => (
-            <TextBox
-            key={text.id}
-            item={text}
-            selected={text.id === selectedTextId}
-            tool={tool}
-            onSelect={() => onTextSelect(text.id)}
-            onChange={(value) => onTextChange(text.id, value)}
-            onDelete={() => onTextDelete(text.id)}
+      <div
+        className="canvas-scale"
+        style={{ width: Math.max(1, Math.round(baseWidth * zoom)), height: Math.max(1, Math.round(baseHeight * zoom)) }}
+      >
+        <div
+          ref={viewportRef}
+          className="canvas-viewport"
+          style={{
+            width: Math.round(baseWidth),
+            height: Math.round(baseHeight),
+            transform: `scale(${zoom})`
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            className="canvas-layer"
+            style={{ cursor: cursorForTool }}
+          />
+          {/* Visual outline of the actual PDF/page bounds so users can tell where the page edge is when zoomed out */}
+          <div
+            className="page-outline"
+            aria-hidden={true}
+            style={{ left: 0, top: 0, width: baseWidth, height: baseHeight }}
+          />
+          <div className="text-layer" style={{ width: baseWidth, height: baseHeight }}>
+            {page.texts.map((text) => (
+              <TextBox
+                key={text.id}
+                item={text}
+                selected={text.id === selectedTextId}
+                tool={tool}
+                onSelect={() => onTextSelect(text.id)}
+                onChange={(value) => onTextChange(text.id, value)}
+                onDelete={() => onTextDelete(text.id)}
                 scale={scale}
-            onDrag={(event) => {
-              const container = containerRef.current;
-              if (!container) return;
-              const rect = container.getBoundingClientRect();
-              const s = scale || 1;
-              dragState.current = {
-                type: 'move',
-                id: text.id,
-                offsetX: (event.clientX - rect.left) / s - text.x,
-                offsetY: (event.clientY - rect.top) / s - text.y
-              };
-            }}
-            onResize={(event) => {
-              const container = containerRef.current;
-              if (!container) return;
-              const rect = container.getBoundingClientRect();
-              const s = scale || 1;
-              dragState.current = {
-                type: 'resize',
-                id: text.id,
-                startWidth: text.width,
-                startHeight: Math.max(24, text.fontSize + 8),
-                originX: (event.clientX - rect.left) / s,
-                originY: (event.clientY - rect.top) / s
-              };
-            }}
-          />
-        ))}
-        {page.attachments?.map((attach) => (
-          <AttachmentBox
-            key={attach.id}
-            item={attach}
-            selected={attach.id === selectedAttachId}
-            tool={tool}
-            onSelect={() => onAttachSelect?.(attach.id)}
-            onChange={(changes) => onAttachChange?.(attach.id, changes)}
-            onDelete={() => onAttachDelete?.(attach.id)}
-            scale={scale}
-            onDrag={(event) => {
-              const container = containerRef.current;
-              if (!container) return;
-              const rect = container.getBoundingClientRect();
-              const s = scale || 1;
-              dragState.current = {
-                type: 'move',
-                id: attach.id,
-                offsetX: (event.clientX - rect.left) / s - attach.x,
-                offsetY: (event.clientY - rect.top) / s - attach.y
-              };
-            }}
-            onResize={(event) => {
-              const container = containerRef.current;
-              if (!container) return;
-              const rect = container.getBoundingClientRect();
-              const s = scale || 1;
-              dragState.current = {
-                type: 'resize',
-                id: attach.id,
-                startWidth: attach.width,
-                startHeight: attach.height,
-                originX: (event.clientX - rect.left) / s,
-                originY: (event.clientY - rect.top) / s
-              };
-            }}
-          />
-        ))}
-              </div>
-              {/* top canvas renders strokes/shapes so highlights sit above editable text */}
-              <canvas
-                ref={topCanvasRef}
-                className="canvas-layer canvas-top"
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                style={{
-                  cursor: cursorForTool,
-                  // capture pointer events when in a drawing/erase/shape or text tool
-                  // so the top canvas can handle creating text and drawing.
-                  pointerEvents:
-                    tool === 'pen' || tool === 'highlighter' || tool === 'eraser' || tool === 'shape' || tool === 'text'
-                      ? 'auto'
-                      : 'none',
-                  position: 'absolute',
-                  left: 0,
-                  top: 0
+                onDrag={(event) => {
+                  const container = containerRef.current;
+                  if (!container) return;
+                  const rect = container.getBoundingClientRect();
+                  const s = scale || 1;
+                  const clientX = event.clientX - rect.left + container.scrollLeft;
+                  const clientY = event.clientY - rect.top + container.scrollTop;
+                  dragState.current = {
+                    type: 'move',
+                    id: text.id,
+                    offsetX: clientX / s - text.x,
+                    offsetY: clientY / s - text.y
+                  };
+                }}
+                onResize={(event) => {
+                  const container = containerRef.current;
+                  if (!container) return;
+                  const rect = container.getBoundingClientRect();
+                  const s = scale || 1;
+                  const clientX = event.clientX - rect.left + container.scrollLeft;
+                  const clientY = event.clientY - rect.top + container.scrollTop;
+                  dragState.current = {
+                    type: 'resize',
+                    id: text.id,
+                    startWidth: text.width,
+                    startHeight: Math.max(24, text.fontSize + 8),
+                    originX: clientX / s,
+                    originY: clientY / s
+                  };
                 }}
               />
-            </div>
-          );
-        })()
-      }
+            ))}
+            {page.attachments?.map((attach) => (
+              <AttachmentBox
+                key={attach.id}
+                item={attach}
+                selected={attach.id === selectedAttachId}
+                tool={tool}
+                onSelect={() => onAttachSelect?.(attach.id)}
+                onDelete={() => onAttachDelete?.(attach.id)}
+                onDrag={(event) => {
+                  const container = containerRef.current;
+                  if (!container) return;
+                  const rect = container.getBoundingClientRect();
+                  const s = scale || 1;
+                  const clientX = event.clientX - rect.left + container.scrollLeft;
+                  const clientY = event.clientY - rect.top + container.scrollTop;
+                  dragState.current = {
+                    type: 'move',
+                    id: attach.id,
+                    offsetX: clientX / s - attach.x,
+                    offsetY: clientY / s - attach.y
+                  };
+                }}
+                onResize={(event) => {
+                  const container = containerRef.current;
+                  if (!container) return;
+                  const rect = container.getBoundingClientRect();
+                  const s = scale || 1;
+                  const clientX = event.clientX - rect.left + container.scrollLeft;
+                  const clientY = event.clientY - rect.top + container.scrollTop;
+                  dragState.current = {
+                    type: 'resize',
+                    id: attach.id,
+                    startWidth: attach.width,
+                    startHeight: attach.height,
+                    originX: clientX / s,
+                    originY: clientY / s
+                  };
+                }}
+              />
+            ))}
+          </div>
+          {/* top canvas renders strokes/shapes so highlights sit above editable text */}
+          <canvas
+            ref={topCanvasRef}
+            className="canvas-layer canvas-top"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            style={{
+              cursor: cursorForTool,
+              // capture pointer events when in a drawing/erase/shape or text tool
+              // so the top canvas can handle creating text and drawing.
+              pointerEvents:
+                tool === 'pen' || tool === 'highlighter' || tool === 'eraser' || tool === 'shape' || tool === 'text'
+                  ? 'auto'
+                  : 'none',
+              position: 'absolute',
+              left: 0,
+              top: 0
+            }}
+          />
+        </div>
+      </div>
     </div>
   );
 };
@@ -1087,11 +1093,11 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
     <div
       className={clsx('text-box', { selected, 'grip-visible': selected && tool !== 'text' })}
       style={{
-        left: (item.x * (scale || 1)),
-        top: (item.y * (scale || 1)),
-        width: (item.width * (scale || 1)),
+        left: item.x,
+        top: item.y,
+        width: item.width,
         color: item.color,
-        fontSize: (item.fontSize * (scale || 1)),
+        fontSize: item.fontSize,
         fontFamily: item.fontFamily,
         fontWeight: item.bold ? 600 : 400,
         fontStyle: item.italic ? 'italic' : 'normal',
@@ -1231,15 +1237,15 @@ type AttachmentBoxProps = {
   selected: boolean;
   tool: ToolType;
   onSelect: () => void;
-  onChange: (changes: Partial<AttachItem>) => void;
   onDelete: () => void;
   onDrag: (event: React.PointerEvent<HTMLElement>) => void;
   onResize: (event: React.PointerEvent<HTMLDivElement>) => void;
-  scale?: number;
 };
 
-const AttachmentBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, onResize, scale }: AttachmentBoxProps) => {
+const AttachmentBox = ({ item, selected, tool, onSelect, onDelete, onDrag, onResize }: AttachmentBoxProps) => {
   const ref = useRef<HTMLDivElement>(null);
+  const isLocked = !!item.locked;
+  const isSelected = selected && !isLocked;
 
   useLayoutEffect(() => {
     const node = ref.current;
@@ -1250,22 +1256,24 @@ const AttachmentBox = ({ item, selected, tool, onSelect, onChange, onDelete, onD
   return (
     <div
       ref={ref}
-      className={clsx('attachment-box', { selected })}
+      className={clsx('attachment-box', { selected: isSelected, locked: isLocked })}
       style={{
-        left: item.x * (scale || 1),
-        top: item.y * (scale || 1),
-        width: item.width * (scale || 1),
-        height: item.height * (scale || 1),
+        left: item.x,
+        top: item.y,
+        width: item.width,
+        height: item.height,
         // When a drawing tool or the text tool is active, let pointer events pass
         // through so the underlying canvas receives them (enables write-over
         // and creating text on top of attachments). For pointer/attach modes
         // keep pointer events enabled so selection and dragging work.
-        pointerEvents:
-          tool === 'pen' || tool === 'highlighter' || tool === 'eraser' || tool === 'shape' || tool === 'text'
+        pointerEvents: isLocked
+          ? 'none'
+          : tool === 'pen' || tool === 'highlighter' || tool === 'eraser' || tool === 'shape' || tool === 'text'
             ? 'none'
             : 'auto'
       }}
       onPointerDown={(event) => {
+        if (isLocked) return;
         // Allow drawing tools to pass the pointer event through to the canvas
         // so users can draw/write over attachments. For pointer (move) tool we
         // intercept to start dragging. For drawing tools (pen/highlighter/eraser/shape)
@@ -1285,7 +1293,7 @@ const AttachmentBox = ({ item, selected, tool, onSelect, onChange, onDelete, onD
       }}
     >
       {/* image is now rendered on the canvas for write-over; overlay shows selection/controls only */}
-      {selected ? (
+      {isSelected ? (
         <>
           <div
             className="attachment__resize"

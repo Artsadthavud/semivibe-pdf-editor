@@ -31,6 +31,12 @@ input {
   /* allow scrolling when the viewport is scaled */
   overflow: auto;
 }
+.canvas-scale {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+  height: 100%;
+}
 .canvas-viewport {
   transform-origin: 0 0;
   display: inline-block;
@@ -220,6 +226,58 @@ input {
 .card-body--text {
   flex-direction: column;
   align-items: stretch;
+}
+
+.card-body--zoom {
+  justify-content: center;
+}
+
+.control-card--zoom {
+  flex: 0 0 260px;
+}
+
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.zoom-button {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: white;
+  color: #1f2937;
+  font-size: 1.15rem;
+  font-weight: 600;
+  box-shadow: 0 8px 14px rgba(15, 23, 42, 0.1);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoom-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 18px rgba(15, 23, 42, 0.12);
+}
+
+.zoom-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.zoom-slider {
+  flex: 1 1 140px;
+  min-width: 120px;
+}
+
+.zoom-reset {
+  padding-inline: 0.8rem;
 }
 
 .setting-group {
