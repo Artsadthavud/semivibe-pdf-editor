@@ -838,6 +838,13 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
     const node = ref.current;
     if (!node) return;
     if (selected && tool === 'text') {
+      // If the node is already focused (user is typing), don't reposition the caret —
+      // running this effect on every item update would force the caret to the start.
+      try {
+        if (document.activeElement === node) return;
+      } catch (e) {
+        // ignore access errors
+      }
       try {
         node.focus();
         const cx = (item as any).initialClientX;

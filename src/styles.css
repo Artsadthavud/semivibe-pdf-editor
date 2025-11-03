@@ -305,6 +305,19 @@ input {
   box-shadow: 0 6px 12px rgba(15, 23, 42, 0.25);
 }
 
+/* Color picker styles */
+.color-picker {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.cp-sv { cursor: crosshair; border-radius: 6px; box-shadow: 0 6px 18px rgba(15,23,42,0.06); }
+.cp-hue { cursor: pointer; margin-top: 8px; border-radius: 6px; box-shadow: 0 6px 12px rgba(15,23,42,0.04); }
+.cp-side { display:flex; flex-direction: column; gap: 8px; }
+.cp-controls { display:flex; gap:8px; align-items:center; }
+.cp-swatch { width: 36px; height: 36px; border-radius: 8px; border: 2px solid rgba(15,23,42,0.06); box-shadow: 0 6px 12px rgba(15,23,42,0.04); }
+.cp-hex { width: 100px; padding: 6px 8px; border-radius: 8px; border: 1px solid #e5e7eb; background: white; }
+
 .density-slider {
   flex: 1;
   accent-color: #2563eb;
