@@ -784,6 +784,50 @@ const Canvas = ({
             style={{ left: 0, top: 0, width: baseWidth, height: baseHeight }}
           />
           <div className="text-layer" style={{ width: baseWidth, height: baseHeight }}>
+            {/* Render attachments first so text boxes sit above them in the DOM.
+                This prevents attachments from intercepting pointer events when
+                users try to interact with text placed on top of images. */}
+            {page.attachments?.map((attach) => (
+              <AttachmentBox
+                key={attach.id}
+                item={attach}
+                selected={attach.id === selectedAttachId}
+                tool={tool}
+                onSelect={() => onAttachSelect?.(attach.id)}
+                onDelete={() => onAttachDelete?.(attach.id)}
+                onDrag={(event) => {
+                  const container = containerRef.current;
+                  if (!container) return;
+                  const rect = container.getBoundingClientRect();
+                  const s = scale || 1;
+                  const clientX = event.clientX - rect.left + container.scrollLeft;
+                  const clientY = event.clientY - rect.top + container.scrollTop;
+                  dragState.current = {
+                    type: 'move',
+                    id: attach.id,
+                    offsetX: clientX / s - attach.x,
+                    offsetY: clientY / s - attach.y
+                  };
+                }}
+                onResize={(event) => {
+                  const container = containerRef.current;
+                  if (!container) return;
+                  const rect = container.getBoundingClientRect();
+                  const s = scale || 1;
+                  const clientX = event.clientX - rect.left + container.scrollLeft;
+                  const clientY = event.clientY - rect.top + container.scrollTop;
+                  dragState.current = {
+                    type: 'resize',
+                    id: attach.id,
+                    startWidth: attach.width,
+                    startHeight: attach.height,
+                    originX: clientX / s,
+                    originY: clientY / s
+                  };
+                }}
+              />
+            ))}
+
             {page.texts.map((text) => (
               <TextBox
                 key={text.id}
@@ -820,46 +864,6 @@ const Canvas = ({
                     id: text.id,
                     startWidth: text.width,
                     startHeight: Math.max(24, text.fontSize + 8),
-                    originX: clientX / s,
-                    originY: clientY / s
-                  };
-                }}
-              />
-            ))}
-            {page.attachments?.map((attach) => (
-              <AttachmentBox
-                key={attach.id}
-                item={attach}
-                selected={attach.id === selectedAttachId}
-                tool={tool}
-                onSelect={() => onAttachSelect?.(attach.id)}
-                onDelete={() => onAttachDelete?.(attach.id)}
-                onDrag={(event) => {
-                  const container = containerRef.current;
-                  if (!container) return;
-                  const rect = container.getBoundingClientRect();
-                  const s = scale || 1;
-                  const clientX = event.clientX - rect.left + container.scrollLeft;
-                  const clientY = event.clientY - rect.top + container.scrollTop;
-                  dragState.current = {
-                    type: 'move',
-                    id: attach.id,
-                    offsetX: clientX / s - attach.x,
-                    offsetY: clientY / s - attach.y
-                  };
-                }}
-                onResize={(event) => {
-                  const container = containerRef.current;
-                  if (!container) return;
-                  const rect = container.getBoundingClientRect();
-                  const s = scale || 1;
-                  const clientX = event.clientX - rect.left + container.scrollLeft;
-                  const clientY = event.clientY - rect.top + container.scrollTop;
-                  dragState.current = {
-                    type: 'resize',
-                    id: attach.id,
-                    startWidth: attach.width,
-                    startHeight: attach.height,
                     originX: clientX / s,
                     originY: clientY / s
                   };
