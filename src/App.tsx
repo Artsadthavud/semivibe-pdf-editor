@@ -1396,7 +1396,10 @@ const App = () => {
               if (next !== 'text') setSelectedTextId(null);
             }}
           />
+          <div className="toolbar-actions">
+            <button type="button" className="toolbar-action" onClick={handleExportPdf} title="Export PDF">Export</button>
           </div>
+        </div>
           {/* toolbar-row end. Palette popover appears next when toggled */}
           {/* Attach card does not include colour controls (handled in the Pen/Highlighter card) */}
           {showPalette ? (
