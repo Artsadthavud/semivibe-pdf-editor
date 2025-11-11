@@ -400,6 +400,7 @@ const App = () => {
     try {
       const a4mm = { w: 210, h: 297 };
       const DPI = 300;
+      const PT_PER_INCH = 72;
       const mmToInch = (mm: number) => mm / 25.4;
       const targetW = Math.round(mmToInch(a4mm.w) * DPI);
       const targetH = Math.round(mmToInch(a4mm.h) * DPI);
@@ -413,7 +414,10 @@ const App = () => {
       const loadImage = (src: string): Promise<HTMLImageElement> =>
         new Promise((resolve, reject) => {
           const img = new Image();
-          img.crossOrigin = 'anonymous';
+          // Only set crossOrigin for actual remote URLs (not data:/blob: which can cause taint issues)
+          // if (src.startsWith('http://') || src.startsWith('https://')) {
+          //   img.crossOrigin = 'anonymous';
+          // }
           img.onload = () => resolve(img);
           img.onerror = (e) => reject(e);
           img.src = src;
@@ -448,8 +452,6 @@ const App = () => {
           const srcPageIndex = imp.pageIds.indexOf(pageModel.id);
           if (srcPageIndex >= 0) {
             const [copied] = await pdfDoc.copyPages(srcPdf, [srcPageIndex]);
-            // add copied page to target doc (preserves vector content)
-            const added = pdfDoc.addPage(copied as any);
 
             // Determine if this page has any user annotations (strokes/shapes/texts or non-background attachments)
             const hasAnnotations = (
@@ -461,167 +463,289 @@ const App = () => {
 
             if (!hasAnnotations) {
               // nothing to overlay; the copied page is sufficient (vector preserved)
+              pdfDoc.addPage(copied as any);
               continue;
             }
 
             // If there are annotations, render only the annotations to a high-res PNG and overlay
-            const offOverlay = document.createElement('canvas');
-            offOverlay.width = targetW;
-            offOverlay.height = targetH;
-            const ctxO = offOverlay.getContext('2d');
-            if (!ctxO) throw new Error('Unable to create overlay canvas');
-            ctxO.clearRect(0, 0, offOverlay.width, offOverlay.height);
+            const pageWidthPt =
+              typeof (copied as any).getWidth === 'function'
+                ? (copied as any).getWidth()
+                : Math.round(mmToInch(a4mm.w) * PT_PER_INCH);
+            const pageHeightPt =
+              typeof (copied as any).getHeight === 'function'
+                ? (copied as any).getHeight()
+                : Math.round(mmToInch(a4mm.h) * PT_PER_INCH);
+            
+            // Get the background attachment to determine the coordinate system used for annotations
+            const backgroundAttachment = (pageModel.attachments ?? []).find(
+              (a) => a.pdfBackgroundGroup === pageModel.pdfImportGroup
+            );
+            
+            // Use display dimensions for coordinate system (annotations are in display space)
+            const baseWidth = backgroundAttachment?.width ?? pageWidthPt;
+            const baseHeight = backgroundAttachment?.height ?? pageHeightPt;
+            const baseX = backgroundAttachment?.x ?? 0;
+            const baseY = backgroundAttachment?.y ?? 0;
+            
+            // Overlay dimensions: start with the PDF page dimensions (in points) converted to DPI
+            // then adjust if the on-screen rendering is rotated relative to the PDF orientation.
+            const pixelsPerPoint = DPI / PT_PER_INCH;
+            const pdfOverlayWidth = Math.max(1, Math.round(pageWidthPt * pixelsPerPoint));
+            const pdfOverlayHeight = Math.max(1, Math.round(pageHeightPt * pixelsPerPoint));
+            let overlayWidth = pdfOverlayWidth;
+            let overlayHeight = pdfOverlayHeight;
+            const displayAspect = baseHeight === 0 ? 1 : baseWidth / baseHeight;
+            const pageAspect = pdfOverlayWidth / pdfOverlayHeight;
+            const swappedAspect = pdfOverlayHeight / pdfOverlayWidth;
+            let orientationRotated = false;
 
-            // compute scale from app CSS width to overlay pixels
-            const containerEl = document.querySelector('.canvas-area') as HTMLElement | null;
-            const appWidth = containerEl ? containerEl.getBoundingClientRect().width : 210;
-            const scaleXov = targetW / appWidth;
-            const scaleYov = targetH / (containerEl ? containerEl.getBoundingClientRect().height : 297);
-
-            // draw non-background attachments (user-added images)
-            for (const attach of (pageModel.attachments ?? []).filter((a) => a.pdfBackgroundGroup !== pageModel.pdfImportGroup)) {
-              try {
-                const img = await loadImage(attach.src);
-                ctxO.drawImage(
-                  img,
-                  attach.x * scaleXov,
-                  attach.y * scaleYov,
-                  attach.width * scaleXov,
-                  attach.height * scaleYov
-                );
-              } catch (e) {}
+            if (
+              Number.isFinite(displayAspect) &&
+              Number.isFinite(pageAspect) &&
+              Math.abs(displayAspect - pageAspect) > 0.01 &&
+              Math.abs(displayAspect - swappedAspect) < 0.01
+            ) {
+              orientationRotated = true;
+              overlayWidth = pdfOverlayHeight;
+              overlayHeight = pdfOverlayWidth;
             }
 
-            // draw shapes (overlay path)
-            const drawShapeOverlay = (shape: Shape) => {
-              ctxO.save();
-              ctxO.strokeStyle = shape.stroke;
-              ctxO.lineWidth = (shape.strokeWidth || 1) * Math.max(scaleXov, scaleYov);
-              ctxO.lineJoin = 'round';
-              ctxO.lineCap = 'round';
-              const sx = shape.start.x * scaleXov;
-              const sy = shape.start.y * scaleYov;
-              const ex = shape.end.x * scaleXov;
-              const ey = shape.end.y * scaleYov;
-              switch (shape.type) {
-                case 'line':
-                  ctxO.beginPath();
-                  ctxO.moveTo(sx, sy);
-                  ctxO.lineTo(ex, ey);
-                  ctxO.stroke();
-                  break;
-                case 'arrow': {
-                  const angle = Math.atan2(ey - sy, ex - sx);
-                  const headLength = 12 + (shape.strokeWidth || 1) * 1.5;
-                  ctxO.beginPath();
-                  ctxO.moveTo(sx, sy);
-                  ctxO.lineTo(ex, ey);
-                  ctxO.stroke();
-                  ctxO.beginPath();
-                  ctxO.moveTo(ex, ey);
-                  ctxO.lineTo(
-                    ex - headLength * Math.cos(angle - Math.PI / 6),
-                    ey - headLength * Math.sin(angle - Math.PI / 6)
-                  );
-                  ctxO.moveTo(ex, ey);
-                  ctxO.lineTo(
-                    ex - headLength * Math.cos(angle + Math.PI / 6),
-                    ey - headLength * Math.sin(angle + Math.PI / 6)
-                  );
-                  ctxO.stroke();
-                  break;
-                }
-                case 'rectangle': {
-                  const left = Math.min(sx, ex);
-                  const top = Math.min(sy, ey);
-                  const width = Math.abs(ex - sx);
-                  const height = Math.abs(ey - sy);
-                  ctxO.strokeRect(left, top, width, height);
-                  break;
-                }
-                case 'ellipse': {
-                  const rx = Math.max(Math.abs(ex - sx) / 2, 1);
-                  const ry = Math.max(Math.abs(ey - sy) / 2, 1);
-                  const cx = (sx + ex) / 2;
-                  const cy = (sy + ey) / 2;
-                  ctxO.beginPath();
-                  ctxO.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-                  ctxO.stroke();
-                  break;
-                }
-                default:
-                  break;
-              }
-              ctxO.restore();
-            };
+            console.log(`[Page ${pageIndex + 1}] Overlay setup:`, {
+              pageWidthPt,
+              pageHeightPt,
+              baseWidth,
+              baseHeight,
+              baseX,
+              baseY,
+              overlayWidth,
+              overlayHeight,
+              pdfOverlayWidth,
+              pdfOverlayHeight,
+              displayAspect,
+              pageAspect,
+              swappedAspect,
+              orientationRotated,
+              pixelsPerPoint,
+              pageRotation:
+                typeof (copied as any).getRotation === 'function' ? (copied as any).getRotation().angle : undefined
+            });
 
-            // draw texts
-            for (const text of pageModel.texts) {
-              const fontSize = text.fontSize * Math.max(scaleXov, scaleYov);
-              ctxO.font = `${text.bold ? '700' : '400'} ${fontSize}px ${text.fontFamily}`;
-              ctxO.fillStyle = text.color || '#000';
-              const lineHeight = fontSize * 1.2;
-              const maxWidth = text.width * scaleXov;
-              const x = text.x * scaleXov;
-              let y = text.y * scaleYov + fontSize;
-              if (text.background) {
-                const lines: string[] = [];
-                if (text.singleLine) lines.push(text.text);
-                else {
-                  const words = (text.text || '').split(/\s+/);
-                  let line = '';
-                  for (const w of words) {
-                    const test = line ? line + ' ' + w : w;
-                    const m = ctxO.measureText(test).width;
-                    if (m > maxWidth && line) {
-                      lines.push(line);
-                      line = w;
-                    } else {
-                      line = test;
-                    }
+            if (orientationRotated) {
+              console.warn(
+                `Page ${pageIndex + 1}: detected orientation mismatch (display aspect ${displayAspect.toFixed(
+                  3
+                )} vs PDF aspect ${pageAspect.toFixed(3)}). Falling back to raster export for this page.`
+              );
+            } else {
+              // add copied page to target doc (preserves vector content)
+              const added = pdfDoc.addPage(copied as any);
+              const offOverlay = document.createElement('canvas');
+              offOverlay.width = overlayWidth;
+              offOverlay.height = overlayHeight;
+              const ctxO = offOverlay.getContext('2d');
+              if (!ctxO) throw new Error('Unable to create overlay canvas');
+              ctxO.clearRect(0, 0, offOverlay.width, offOverlay.height);
+
+              // compute scale from app CSS coordinate space to overlay pixels
+              console.log(`[Export Page ${pageIndex + 1}] PDF dimensions:`, {
+                pageWidthPt,
+                pageHeightPt,
+                overlayWidth,
+                overlayHeight,
+                baseWidth,
+                baseHeight,
+                originalWidth: backgroundAttachment?.originalWidth,
+                originalHeight: backgroundAttachment?.originalHeight,
+                displayWidth: backgroundAttachment?.width,
+                displayHeight: backgroundAttachment?.height
+              });
+
+              const originalWidth = backgroundAttachment?.originalWidth ?? pageWidthPt;
+              const originalHeight = backgroundAttachment?.originalHeight ?? pageHeightPt;
+              const scaleXov = overlayWidth / Math.max(1, baseWidth);
+              const scaleYov = overlayHeight / Math.max(1, baseHeight);
+              const scaleAvg = (scaleXov + scaleYov) / 2;
+
+              console.log(`[Page ${pageIndex + 1}] Scale factors:`, {
+                baseWidth,
+                baseHeight,
+                overlayWidth,
+                overlayHeight,
+                orientationRotated,
+                originalWidth,
+                originalHeight,
+                displayAspect: Number.isFinite(displayAspect) ? displayAspect.toFixed(3) : 'n/a',
+                scaleXov: scaleXov.toFixed(3),
+                scaleYov: scaleYov.toFixed(3),
+                scaleAvg: scaleAvg.toFixed(3)
+              });
+
+              for (const attach of (pageModel.attachments ?? []).filter((a) => a.pdfBackgroundGroup !== pageModel.pdfImportGroup)) {
+                try {
+                  const img = await loadImage(attach.src);
+                  ctxO.drawImage(
+                    img,
+                    attach.x * scaleXov,
+                    attach.y * scaleYov,
+                    attach.width * scaleXov,
+                    attach.height * scaleYov
+                  );
+                } catch (e) {}
+              }
+
+              const drawShapeOverlay = (shape: Shape) => {
+                ctxO.save();
+                ctxO.strokeStyle = shape.stroke;
+                ctxO.lineWidth = (shape.strokeWidth || 1) * scaleAvg;
+                ctxO.lineJoin = 'round';
+                ctxO.lineCap = 'round';
+                const sx = shape.start.x * scaleXov;
+                const sy = shape.start.y * scaleYov;
+                const ex = shape.end.x * scaleXov;
+                const ey = shape.end.y * scaleYov;
+                switch (shape.type) {
+                  case 'line':
+                    ctxO.beginPath();
+                    ctxO.moveTo(sx, sy);
+                    ctxO.lineTo(ex, ey);
+                    ctxO.stroke();
+                    break;
+                  case 'arrow': {
+                    const angle = Math.atan2(ey - sy, ex - sx);
+                    const headLength = 12 + (shape.strokeWidth || 1) * 1.5;
+                    ctxO.beginPath();
+                    ctxO.moveTo(sx, sy);
+                    ctxO.lineTo(ex, ey);
+                    ctxO.stroke();
+                    ctxO.beginPath();
+                    ctxO.moveTo(ex, ey);
+                    ctxO.lineTo(
+                      ex - headLength * Math.cos(angle - Math.PI / 6),
+                      ey - headLength * Math.sin(angle - Math.PI / 6)
+                    );
+                    ctxO.moveTo(ex, ey);
+                    ctxO.lineTo(
+                      ex - headLength * Math.cos(angle + Math.PI / 6),
+                      ey - headLength * Math.sin(angle + Math.PI / 6)
+                    );
+                    ctxO.stroke();
+                    break;
                   }
-                  if (line) lines.push(line);
+                  case 'rectangle': {
+                    const left = Math.min(sx, ex);
+                    const top = Math.min(sy, ey);
+                    const width = Math.abs(ex - sx);
+                    const height = Math.abs(ey - sy);
+                    ctxO.strokeRect(left, top, width, height);
+                    break;
+                  }
+                  case 'ellipse': {
+                    const rx = Math.max(Math.abs(ex - sx) / 2, 1);
+                    const ry = Math.max(Math.abs(ey - sy) / 2, 1);
+                    const cx = (sx + ex) / 2;
+                    const cy = (sy + ey) / 2;
+                    ctxO.beginPath();
+                    ctxO.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+                    ctxO.stroke();
+                    break;
+                  }
+                  default:
+                    break;
                 }
-                const bgH = lines.length * lineHeight + 8;
-                ctxO.fillStyle = text.backgroundColor || '#fff';
-                ctxO.fillRect(x - 4, text.y * scaleYov - 4, maxWidth + 8, bgH);
+                ctxO.restore();
+              };
+
+              for (const shape of pageModel.shapes) drawShapeOverlay(shape);
+
+              for (const stroke of pageModel.strokes) {
+                if (!stroke.points || stroke.points.length < 2) continue;
+                ctxO.save();
+                ctxO.lineJoin = 'round';
+                ctxO.lineCap = 'round';
+                ctxO.lineWidth = (stroke.thickness || 1) * scaleAvg;
+                ctxO.strokeStyle = stroke.color;
+                ctxO.globalAlpha = stroke.tool === 'highlighter' ? stroke.opacity ?? 0.55 : 1;
+                ctxO.beginPath();
+                ctxO.moveTo(stroke.points[0].x * scaleXov, stroke.points[0].y * scaleYov);
+                for (let i = 1; i < stroke.points.length; i += 1) {
+                  ctxO.lineTo(stroke.points[i].x * scaleXov, stroke.points[i].y * scaleYov);
+                }
+                ctxO.stroke();
+                ctxO.restore();
+              }
+
+              for (const text of pageModel.texts) {
+                const fontSize = text.fontSize * scaleAvg;
+                ctxO.font = `${text.bold ? '700' : '400'} ${fontSize}px ${text.fontFamily}`;
                 ctxO.fillStyle = text.color || '#000';
-                for (const l of lines) {
-                  ctxO.fillText(l, x, y);
-                  y += lineHeight;
-                }
-              } else {
-                if (text.singleLine) {
-                  ctxO.fillText(text.text || '', x, y);
-                } else {
-                  const words = (text.text || '').split(/\s+/);
-                  let line = '';
-                  for (const w of words) {
-                    const test = line ? line + ' ' + w : w;
-                    const m = ctxO.measureText(test).width;
-                    if (m > maxWidth && line) {
-                      ctxO.fillText(line, x, y);
-                      line = w;
-                      y += lineHeight;
-                    } else {
-                      line = test;
+                const lineHeight = fontSize * 1.2;
+                const maxWidth = text.width * scaleXov;
+                const x = text.x * scaleXov;
+                let y = text.y * scaleYov + fontSize;
+                if (text.background) {
+                  const lines: string[] = [];
+                  if (text.singleLine) lines.push(text.text);
+                  else {
+                    const words = (text.text || '').split(/\s+/);
+                    let line = '';
+                    for (const w of words) {
+                      const test = line ? line + ' ' + w : w;
+                      const m = ctxO.measureText(test).width;
+                      if (m > maxWidth && line) {
+                        lines.push(line);
+                        line = w;
+                      } else {
+                        line = test;
+                      }
                     }
+                    if (line) lines.push(line);
                   }
-                  if (line) ctxO.fillText(line, x, y);
+                  const bgH = lines.length * lineHeight + 8;
+                  ctxO.fillStyle = text.backgroundColor || '#fff';
+                  ctxO.fillRect(x - 4, text.y * scaleYov - 4, maxWidth + 8, bgH);
+                  ctxO.fillStyle = text.color || '#000';
+                  for (const l of lines) {
+                    ctxO.fillText(l, x, y);
+                    y += lineHeight;
+                  }
+                } else {
+                  if (text.singleLine) {
+                    ctxO.fillText(text.text || '', x, y);
+                  } else {
+                    const words = (text.text || '').split(/\s+/);
+                    let line = '';
+                    for (const w of words) {
+                      const test = line ? line + ' ' + w : w;
+                      const m = ctxO.measureText(test).width;
+                      if (m > maxWidth && line) {
+                        ctxO.fillText(line, x, y);
+                        line = w;
+                        y += lineHeight;
+                      } else {
+                        line = test;
+                      }
+                    }
+                    if (line) ctxO.fillText(line, x, y);
+                  }
                 }
               }
-            }
 
-            const overlayBlob: Blob | null = await new Promise((resolve) => offOverlay.toBlob((b) => resolve(b), 'image/png'));
-            if (overlayBlob) {
-              const overlayArray = await overlayBlob.arrayBuffer();
-              const overlayImg = await pdfDoc.embedPng(overlayArray);
-              const ptPerInch = 72;
-              const a4pt = { w: Math.round(mmToInch(a4mm.w) * ptPerInch), h: Math.round(mmToInch(a4mm.h) * ptPerInch) };
-              added.drawImage(overlayImg, { x: 0, y: 0, width: a4pt.w, height: a4pt.h });
-            }
+              const overlayBlob: Blob | null = await new Promise((resolve) =>
+                offOverlay.toBlob((b) => resolve(b), 'image/png')
+              );
+              if (!overlayBlob) {
+                console.warn(
+                  `Page ${pageIndex + 1}: overlay canvas toBlob failed (canvas may be tainted). Annotations may not appear in export.`
+                );
+              } else {
+                const overlayArray = await overlayBlob.arrayBuffer();
+                const overlayImg = await pdfDoc.embedPng(overlayArray);
+                added.drawImage(overlayImg, { x: 0, y: 0, width: pageWidthPt, height: pageHeightPt });
+              }
 
-            continue;
+              continue;
+            }
           }
         }
 
@@ -635,11 +759,22 @@ const App = () => {
         ctx.fillRect(0, 0, off.width, off.height);
 
         // draw attachments, shapes, strokes and text scaled to the target A4 canvas
+        // Use the background attachment dimensions (canvas coordinate system) as the source size
+        // to correctly scale annotations to the high-res export canvas.
+        const backgroundAttachment = (pageModel.attachments ?? []).find(
+          (a) => a.pdfBackgroundGroup === pageModel.pdfImportGroup
+        );
+        // If there's a PDF background, use its display dimensions; otherwise use container/fallback
         const container = document.querySelector('.canvas-area') as HTMLElement | null;
-        const srcWidth = container ? container.getBoundingClientRect().width : 210;
-        const srcHeight = container ? container.getBoundingClientRect().height : 297;
-        const scaleX = targetW / srcWidth;
-        const scaleY = targetH / srcHeight;
+        const containerRect = container?.getBoundingClientRect();
+        const srcWidth = backgroundAttachment
+          ? backgroundAttachment.width
+          : container?.scrollWidth ?? containerRect?.width ?? 210;
+        const srcHeight = backgroundAttachment
+          ? backgroundAttachment.height
+          : container?.scrollHeight ?? containerRect?.height ?? 297;
+        const scaleX = targetW / Math.max(1, srcWidth);
+        const scaleY = targetH / Math.max(1, srcHeight);
 
         for (const attach of pageModel.attachments ?? []) {
           try {
@@ -792,11 +927,16 @@ const App = () => {
         }
 
         const blob: Blob | null = await new Promise((resolve) => off.toBlob((b) => resolve(b), 'image/png'));
-        if (!blob) throw new Error('Failed to render page image');
+        if (!blob) {
+          console.error(`Page ${pageIndex + 1}: fallback canvas toBlob failed (canvas may be tainted). Skipping page.`);
+          throw new Error(`Failed to render page ${pageIndex + 1} image (canvas tainted or toBlob failed)`);
+        }
         const arrayBuffer = await blob.arrayBuffer();
         const img = await pdfDoc.embedPng(arrayBuffer);
-        const ptPerInch = 72;
-        const a4pt = { w: Math.round(mmToInch(a4mm.w) * ptPerInch), h: Math.round(mmToInch(a4mm.h) * ptPerInch) };
+        const a4pt = {
+          w: Math.round(mmToInch(a4mm.w) * PT_PER_INCH),
+          h: Math.round(mmToInch(a4mm.h) * PT_PER_INCH)
+        };
         const page = pdfDoc.addPage([a4pt.w, a4pt.h]);
         page.drawImage(img, { x: 0, y: 0, width: a4pt.w, height: a4pt.h });
       }
@@ -1078,10 +1218,18 @@ const App = () => {
         if (!ctx) continue;
         // pdfjs types expect a `canvas` property on RenderParameters; pass the canvas element.
         await pdfPage.render({ canvas, viewport: renderViewport } as any).promise;
-        const blob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
-        if (!blob) continue;
-        const url = URL.createObjectURL(blob);
-        objectUrlsRef.current.add(url);
+        // Convert to data URL (instead of blob URL) to avoid tainted canvas issues during export
+        // and ensure attachment images are always accessible for re-rendering/export.
+        let url: string;
+        try {
+          url = canvas.toDataURL('image/png');
+        } catch (e) {
+          // fallback to blob URL if toDataURL fails
+          const blob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
+          if (!blob) continue;
+          url = URL.createObjectURL(blob);
+          objectUrlsRef.current.add(url);
+        }
 
         // ensure localPages has a slot for this page
         while (localPages.length < p) {
@@ -1092,7 +1240,8 @@ const App = () => {
 
         // create attachment that covers the full page area (store sizes in app CSS pixels)
         const displayWidth = Math.round(containerWidth);
-        const displayHeight = Math.round((renderViewport.height / renderViewport.width) * displayWidth);
+        // Use viewport (scale=1) aspect ratio to ensure correct proportions
+        const displayHeight = Math.round((viewport.height / viewport.width) * displayWidth);
         const attach: AttachItem = {
           id: createId(),
           x: 0,
@@ -1103,7 +1252,10 @@ const App = () => {
           src: url,
           name: `${file.name} (page ${p})`,
           locked: true,
-          pdfBackgroundGroup: groupId
+          pdfBackgroundGroup: groupId,
+          // store original PDF page dimensions (at scale=1) for correct export scaling
+          originalWidth: viewport.width,
+          originalHeight: viewport.height
         };
 
         const target = localPages[p - 1];

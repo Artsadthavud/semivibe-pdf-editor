@@ -68,6 +68,10 @@ export type AttachItem = {
   locked?: boolean;
   // group id for the originating PDF import
   pdfBackgroundGroup?: string;
+  // original dimensions (before scaling to fit viewport) for PDF backgrounds
+  // used to correctly scale annotations during export
+  originalWidth?: number;
+  originalHeight?: number;
 };
 
 export type Page = {
