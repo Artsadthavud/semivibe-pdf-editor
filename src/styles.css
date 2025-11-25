@@ -560,12 +560,14 @@ input {
 .text-box__content {
   min-height: 38px;
   outline: none;
-  white-space: pre-wrap;
+  white-space: pre-wrap !important;
   cursor: text;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .text-box__content.single-line {
-  white-space: nowrap;
+  white-space: nowrap !important;
   overflow: hidden;
   text-overflow: ellipsis;
 }

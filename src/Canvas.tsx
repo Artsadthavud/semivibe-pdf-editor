@@ -1110,8 +1110,7 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
         backgroundColor: item.background ? `${item.backgroundColor}E6` : 'transparent',
         boxShadow: item.background ? '0 8px 18px rgba(15, 23, 42, 0.15)' : 'none',
         borderColor: item.background ? 'transparent' : 'transparent',
-        cursor: tool === 'pointer' ? 'grab' : 'text',
-        userSelect: tool === 'pointer' ? 'none' : 'text'
+        cursor: tool === 'pointer' ? 'grab' : 'text'
       }}
       onPointerDown={(event) => {
         event.stopPropagation();
@@ -1149,9 +1148,13 @@ const TextBox = ({ item, selected, tool, onSelect, onChange, onDelete, onDrag, o
         ref={ref}
         className={clsx('text-box__content', { 'single-line': item.singleLine })}
         data-placeholder="Start typing here..."
-        contentEditable={tool === 'text'}
+        contentEditable={true}
         suppressContentEditableWarning
         spellCheck={tool === 'text'}
+        style={{
+          pointerEvents: tool === 'text' ? 'auto' : 'none',
+          userSelect: tool === 'text' ? 'text' : 'none'
+        }}
         onPointerDown={(event) => {
           event.stopPropagation();
           onSelect();
